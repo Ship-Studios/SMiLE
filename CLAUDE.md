@@ -33,6 +33,11 @@ from smile.server import mcp
 import asyncio
 asyncio.run(mcp.list_tools())
 "
+
+# Build/serve the API reference docs site (mkdocs + mkdocstrings, autodoc from docstrings)
+uv sync --extra docs
+uv run mkdocs serve          # live-reloading dev server at http://127.0.0.1:8000
+uv run mkdocs build --strict # CI-style build; fails on broken links/cross-refs
 ```
 
 There is no test framework dependency (no pytest) — `tests/test_capabilities.py` is a self-contained

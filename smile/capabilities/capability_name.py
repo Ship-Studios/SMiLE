@@ -10,4 +10,7 @@ if typing.TYPE_CHECKING:
 
 
 def capability_name(self: "Capability") -> str:
+    """The name this capability is exposed under -- the registered
+    `name=`/prefix override if one was given, else the function's own
+    `__name__`."""
     return self._name or self.func.__name__

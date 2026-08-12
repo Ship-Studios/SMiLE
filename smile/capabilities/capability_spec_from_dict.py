@@ -13,6 +13,10 @@ if typing.TYPE_CHECKING:
 
 
 def capability_spec_from_dict(cls: type, data: dict[str, Any]) -> "CapabilitySpec":
+    """Build a CapabilitySpec from a plain dict -- the shape a JSON/YAML
+    capability definition parses into. Raises CapabilityDefinitionError
+    if `name`, `description`, or `target` is missing; `parameters`,
+    `returns`, and `example` fall back to their dataclass defaults."""
     required = {"name", "description", "target"}
     missing = required - data.keys()
     if missing:
