@@ -26,9 +26,14 @@ is allowed to call.
 
 ```bash
 uv sync --extra dev   # dev extra pulls in google-genai + pyyaml, for the e2e test
-uv run python3 tests/test_capabilities.py   # unit tests for all 4 registration paths
+uv run python3 tests/test_capabilities.py   # unit tests for all registration paths
+uv run python3 -m examples.order_support.run   # full end-to-end example app, no API key needed
 GEMINI_API_KEY=... uv run python3 tests/e2e_gemini.py   # live agent test
 ```
+
+See `examples/order_support/` for a standalone app that wires SMiLE onto
+plain application code using every registration path together, then runs
+a realistic multi-step task through the sandbox in one round trip.
 
 ## Defining capabilities
 
