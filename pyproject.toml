@@ -1,0 +1,16 @@
+[project]
+name = "smile-mcp"
+version = "0.1.0"
+description = "SMiLE (Secure Message in Lambda Expressions) -- prototype MCP server for agent-authored Python against a sandboxed capability namespace"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "mcp[cli]>=2.0.0",
+]
+
+[project.optional-dependencies]
+yaml = ["pyyaml>=6.0.3"]
+dev = ["google-genai>=2.17.0", "pyyaml>=6.0.3"]
+
+[project.scripts]
+smile-mcp = "smile.server:main"

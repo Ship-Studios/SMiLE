@@ -1,0 +1,25 @@
+{
+  "capabilities": [
+    {
+      "name": "get_todo_json",
+      "description": "Fetch a todo item by ID.",
+      "target": {
+        "kind": "http",
+        "method": "GET",
+        "url_template": "https://jsonplaceholder.typicode.com/todos/{todo_id}"
+      },
+      "parameters": {
+        "todo_id": { "type": "int", "required": true }
+      },
+      "returns": "dict"
+    },
+    {
+      "name": "get_product_json",
+      "description": "Look up a product by SKU via an existing module function.",
+      "target": {
+        "kind": "python",
+        "path": "fixtures.sample_module.lookup_product"
+      }
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+capabilities:
+  - name: list_posts_yaml
+    description: List blog posts from a public test API.
+    target:
+      kind: http
+      method: GET
+      url_template: "https://jsonplaceholder.typicode.com/posts"
+    parameters:
+      userId:
+        type: int
+        required: false
+    returns: list
