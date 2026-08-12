@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from smile.example_app import registry
 from smile.sandbox import run_script
 from smile.server.mcp_instance import mcp
+from smile.server.registry_instance import registry
 
 
 @mcp.tool()

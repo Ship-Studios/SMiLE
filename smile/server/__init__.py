@@ -15,6 +15,13 @@ Exposes two tools to any MCP client:
 Run with:  uv run mcp dev smile/server/__init__.py   (MCP Inspector, for manual testing)
        or: uv run python3 -m smile.server            (stdio server, for a real client)
 
+The capability set served is resolved once at import time by
+load_registry() (registry_instance.py) from environment config, so a
+consumer of the packaged smile-mcp entry point can supply their own
+capabilities without forking SMiLE -- see load_registry.py for the
+SMILE_CAPABILITIES / SMILE_CAPABILITY_SPEC env vars. With neither set,
+it falls back to smile.example_app's bundled demo registry.
+
 This package follows the project's one-function/method-per-file rule
 (see CLAUDE.md): each tool lives in its own module, registered against
 the shared `mcp` instance in mcp_instance.py. Importing them here (for
