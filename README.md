@@ -77,6 +77,92 @@ unpicklable callables (closures, lambdas) all raise immediately, with a
 message telling you how to fix it, instead of failing later inside the
 sandbox.
 
+## Large results don't blow up the context window
+
+A script's result goes straight into the agent's context, so SMiLE caps how
+much can come back. Returning 10,000 rows measures ~334k tokens — enough to
+overflow any current context window on its own. Instead:
+
+- **Results over the budget are truncated into a summary** naming the
+  original shape, how many items were omitted, and a sample. The note is
+  explicitly flagged, so an agent can't mistake a 20-row preview for a
+  complete answer.
+- **The full result stays fetchable.** It's stored server-side and exposed
+  as an MCP resource at `smile://results/{id}`, returned alongside the
+  summary as `full_result_uri` — so the data isn't lost, just not forced
+  into context.
+- **stdout/stderr are capped too**, keeping head and tail so a final
+  summary or traceback survives.
+
+In practice a 10,000-row result costs ~580 tokens inline instead of
+~334,000, and the agent is told how to get the rest if it genuinely needs
+it.
+
+Defaults are sized conservatively against a **100k-token context window**,
+on the assumption that `execute_script` gets called repeatedly in a loop —
+so what matters is how many calls fit, not whether one does:
+
+| | Tokens | Share of a 100k window |
+|---|---|---|
+| Typical call (aggregated result) | ~100–600 | <1% |
+| Worst case (capped result + both streams) | ~5,000 | ~5% |
+
+That leaves room for roughly 20 worst-case calls before context pressure
+becomes real. The result cap is still generous in absolute terms — around
+100 rows of typical CRM data passes through untouched, so shortlists and
+summaries are never clipped; only accidental data dumps are.
+
+Budgets are configurable per call via `run_script(..., result_budget=,
+stream_budget=)`; pass `0` to disable them when calling SMiLE as a library
+rather than behind an LLM. Running as an MCP server, set them in
+`.mcp.json` — see Configuration below.
+
+## Configuration
+
+Everything a consumer needs to tune is an environment variable, set in your
+MCP client's `.mcp.json`. Copy [`.mcp.json.example`](.mcp.json.example) as
+a starting point — it boots as-is against the bundled demo app.
+
+```json
+{
+  "mcpServers": {
+    "smile": {
+      "command": "uv",
+      "args": ["run", "smile-mcp"],
+      "env": {
+        "SMILE_CAPABILITIES": "myapp.integrations.registry:registry",
+        "SMILE_RESULT_BUDGET": "12000",
+        "SMILE_STREAM_BUDGET": "4000",
+        "SMILE_TIMEOUT_S": "10",
+        "SMILE_MAX_STORED_RESULTS": "32"
+      }
+    }
+  }
+}
+```
+
+| Variable | Default | What it does |
+|---|---|---|
+| `SMILE_CAPABILITIES` | — | `module.path:attr` reference to your own `CapabilityRegistry`. |
+| `SMILE_CAPABILITY_SPEC` | — | Path to a JSON/YAML capability spec file instead. |
+| `SMILE_RESULT_BUDGET` | `12000` | Max characters of `return_value` returned inline; `0` disables. |
+| `SMILE_STREAM_BUDGET` | `4000` | Max characters of stdout and of stderr each; `0` disables. |
+| `SMILE_TIMEOUT_S` | `10` | Seconds a script may run before termination. |
+| `SMILE_MAX_STORED_RESULTS` | `32` | Full results retained for `smile://results/{id}` fetches. |
+
+Set `SMILE_CAPABILITIES` **or** `SMILE_CAPABILITY_SPEC`, not both; with
+neither, the bundled demo CRM is served. Budgets are in characters
+(~4 chars/token) — raise them if your model has a window larger than the
+100k the defaults assume.
+
+Values are validated at startup, so a typo (`SMILE_RESULT_BUDGET=100k`)
+stops the server with a message naming the variable, rather than silently
+falling back to a default you didn't choose.
+
+The better fix is usually to aggregate in the script — `__result__ =
+len(orders)` rather than `__result__ = orders` — which is what
+`execute_script`'s tool description now tells the agent to do.
+
 **Full guide, with examples for every path:** see the
 [Defining capabilities](docs/capabilities.md) docs page, or build the docs
 site locally:

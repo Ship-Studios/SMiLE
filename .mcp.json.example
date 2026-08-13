@@ -1,0 +1,47 @@
+{
+  "$comment": [
+    "Example MCP client configuration for the SMiLE server.",
+    "Copy to .mcp.json (or merge into your client's existing config) and edit.",
+    "Every env var below is optional -- the defaults shown are what SMiLE uses",
+    "if you omit them entirely. See README.md 'Configuration' for details."
+  ],
+  "mcpServers": {
+    "smile": {
+      "command": "uv",
+      "args": ["run", "smile-mcp"],
+      "env": {
+        "$comment_capabilities": [
+          "Which capabilities to serve. Pick ONE of the two settings below;",
+          "setting both is an error the server reports at startup. As written,",
+          "neither is set, so this config runs against the bundled demo CRM and",
+          "works as-is -- uncomment one and point it at your own code.",
+          "",
+          "SMILE_CAPABILITIES takes a 'module.path:attribute' reference to your",
+          "own CapabilityRegistry; importing that module must register it.",
+          "SMILE_CAPABILITY_SPEC takes a path to a JSON/YAML spec file instead,",
+          "for capability sets with no Python wrapper code at all.",
+          "",
+          "  \"SMILE_CAPABILITIES\": \"myapp.integrations.registry:registry\",",
+          "  \"SMILE_CAPABILITY_SPEC\": \"/abs/path/to/capabilities.yaml\","
+        ],
+
+        "$comment_budgets": [
+          "Output budgets, in CHARACTERS (~4 chars per token).",
+          "Defaults are sized against a 100k-token context window: worst case",
+          "~5,000 tokens per call, so ~20 calls before context pressure.",
+          "Raise these if your model has a larger window; lower them if smaller.",
+          "Set to 0 to disable a limit entirely."
+        ],
+        "SMILE_RESULT_BUDGET": "12000",
+        "SMILE_STREAM_BUDGET": "4000",
+
+        "$comment_runtime": [
+          "Seconds a sandboxed script may run before it is terminated, and how",
+          "many full results are retained for smile://results/{id} fetches."
+        ],
+        "SMILE_TIMEOUT_S": "10",
+        "SMILE_MAX_STORED_RESULTS": "32"
+      }
+    }
+  }
+}

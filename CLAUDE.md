@@ -74,7 +74,12 @@ Three layers, each independent enough to reason about alone:
    `registry.namespace()`). `execute_script`'s tool description is itself the API reference the agent
    reads before writing code — this is deliberate: MCP's native discovery (`tools/list`) is built for
    "one tool, one call," so the capability catalog is pushed into the tool description / a companion
-   tool rather than expressed as separate MCP tools per capability.
+   tool rather than expressed as separate MCP tools per capability. That description is **generated**
+   from the served registry by `build_execute_script_description()` and passed to `@mcp.tool(description=...)`
+   — not written as `execute_script`'s docstring. Since the served registry is configurable
+   (`SMILE_CAPABILITIES`/`SMILE_CAPABILITY_SPEC`), a hardcoded docstring could only ever describe the
+   bundled demo app, and would hand every other consumer a worked example calling functions that don't
+   exist for them.
 
 ### Four ways to register a capability (increasing leverage)
 
@@ -114,6 +119,66 @@ covers the *module-level function targets* used to pickle `multiprocessing.Proce
 (see `smile/sandbox/worker.py`): the target must be reachable by a stable dotted import path, not a
 closure or a method bound to a locally-constructed object.
 
+### Output budgets: the return path is context-bounded
+
+SMiLE's premise is "one script, one result" — but the *result* still lands verbatim in the agent's
+context, so an unbounded result is a context-exhaustion bug. Measured on realistic CRM rows, 10k rows is
+~1.3M characters (~334k tokens), which overflows any current window outright; a stray `print` in a loop
+cost 47k tokens. Two layers address this:
+
+1. **Truncation** (`smile/sandbox/truncate_value.py`, `truncate_stream.py`). `run_script` caps
+   `return_value` at `result_budget` characters and each stream at `stream_budget` (both defaults in
+   `constants.py`; pass `0` to disable, which library callers not feeding an LLM should do). Defaults
+   are sized against a **100k-token context window** — the conservative planning assumption, not the
+   largest window available, since a budget tuned to a big window misbehaves silently on a smaller one.
+   Consumers override them per-deployment via env vars in `.mcp.json` (`SMILE_RESULT_BUDGET`,
+   `SMILE_STREAM_BUDGET`, `SMILE_TIMEOUT_S`, `SMILE_MAX_STORED_RESULTS`) — resolved once at import time
+   by `load_settings()` into a frozen `ServerSettings` (`settings_instance.py`), the same shape
+   `load_registry()`/`registry_instance.py` already use. Malformed values raise at **startup** rather
+   than falling back to a default: a silently ignored budget produces results truncated at a size the
+   consumer never chose, with nothing anywhere saying so. `.mcp.json.example` is the shipped reference
+   and is covered by a test asserting it parses and boots.
+   Because `execute_script` is called repeatedly in a loop, the number that matters is calls-per-window,
+   not one call: worst case is ~5,000 tokens (~5% of 100k, so ~20 calls before real pressure). If you
+   change these, re-derive them the same way rather than picking round numbers. An
+   oversized result is replaced by a **note**, not a silent slice: original shape, item counts, an
+   explicit `truncated: True`, and guidance to aggregate. This is load-bearing — an agent handed 20 of
+   10,000 rows with no marker will report "20" to the user, which is worse than an error. Streams keep
+   head *and* tail, because the interesting output (a failure, a summary) is usually at the end.
+2. **`ResourceLink`** (`smile/server/full_result_resource.py`, `result_store.py`). The full value is
+   kept server-side in a small bounded `ResultStore` and exposed at `smile://results/{result_id}`, so
+   the agent can fetch the rows deliberately instead of being force-fed them or losing them.
+
+**Ordering constraint:** truncation happens in the **parent** (`build_script_result.py`), not the child.
+The child must send the complete value across the queue so the parent can store it for the resource
+link — truncating in `build_payload` would destroy the data before anything could stash it. This is safe
+only because the parent now drains the queue while the child writes; see the constraint below.
+
+`ResultStore.get` returns a `RESULT_MISSING` sentinel rather than `None` for unknown/evicted ids, since
+`None` is a perfectly valid script result and conflating them would report an evicted result as a
+successful null.
+
+### Non-obvious constraint: never `join()` the sandbox child before draining its queue
+
+`multiprocessing.Queue` is backed by a pipe with a bounded OS buffer (~64KB). `Queue.put()` hands the
+payload to a **background feeder thread** in the child and returns immediately; that thread blocks once
+the buffer fills, and the child cannot exit until the parent reads. Two consequences, both of which were
+live bugs:
+
+- **`proc.join(timeout)` before reading the queue deadlocks** on any script whose payload exceeds the
+  buffer — the child waits for the parent to read, the parent waits for the child to exit. The symptom is
+  a *spurious timeout* that discards a correctly-computed result. `await_payload()` (`smile/sandbox/`)
+  polls the queue in short slices instead, which keeps the pipe draining. Join only *after* the payload
+  is in hand.
+- **`try`/`except` around `put()` cannot catch a `PicklingError`**, because the pickling happens on that
+  feeder thread, not at the call site. An unpicklable `__result__` silently dropped the whole payload.
+  `build_payload()` pickles the value up front and substitutes its `repr` on failure, so the fallback is
+  actually reachable.
+
+A crashed child (segfault, OOM, `os._exit`) does **not** raise `EOFError` in the parent's reader — the
+queue just stays empty — so "timed out" and "died without reporting" are only distinguishable by checking
+`proc.is_alive()` between polls. Don't collapse those two branches.
+
 ### Namespace prefixes are real attribute access, not string keys
 
 A capability registered with `prefix="stripe."` (e.g. `"stripe.charge_card"`) is exposed inside the
@@ -122,6 +187,12 @@ sandbox as a `_Namespace` object at global name `stripe`, with `charge_card` as 
 of this, `Capability.stub_signature()` renders namespaced capabilities in call-style form
 (`stripe.charge_card(amount_cents: int) -> dict`) rather than as a `def` statement — `def
 stripe.charge_card(...): ...` isn't valid Python syntax.
+
+Because the flattened namespace binds `stripe` to a `_Namespace` object, a *flat* capability named
+`stripe` and a prefixed one named `stripe.charge_card` cannot coexist — one silently shadows the other,
+and `registry_add`'s exact-key duplicate check never sees it (they're different dict keys). That's what
+`validate_no_namespace_shadowing()` catches at registration time. Ordinary siblings sharing a prefix
+(`crm.a` + `crm.b`) are fine and must keep working — only the bare namespace head collides.
 
 ### `smile/example_app/`
 
