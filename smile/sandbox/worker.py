@@ -15,6 +15,7 @@ import traceback
 from contextlib import redirect_stderr, redirect_stdout
 from typing import Any, Callable
 
+from smile.sandbox.build_payload import build_payload
 from smile.sandbox.build_restricted_globals import build_restricted_globals
 
 
@@ -41,23 +42,15 @@ def worker(
     except Exception:
         error = traceback.format_exc()
 
-    try:
-        result_queue.put(
-            {
-                "stdout": stdout_buf.getvalue(),
-                "stderr": stderr_buf.getvalue(),
-                "return_value": return_value,
-                "error": error,
-            }
+    # build_payload pickles return_value up front and substitutes its repr
+    # if that fails -- the substitution has to happen before put(), since
+    # put() serializes on a feeder thread where a PicklingError would be
+    # invisible here. See build_payload.py.
+    result_queue.put(
+        build_payload(
+            stdout=stdout_buf.getvalue(),
+            stderr=stderr_buf.getvalue(),
+            return_value=return_value,
+            error=error,
         )
-    except Exception:
-        # If return_value isn't picklable, fall back to its repr so the
-        # parent process doesn't hang waiting on a queue put that failed.
-        result_queue.put(
-            {
-                "stdout": stdout_buf.getvalue(),
-                "stderr": stderr_buf.getvalue(),
-                "return_value": repr(return_value),
-                "error": error,
-            }
-        )
+    )

@@ -18,6 +18,13 @@ def registry_register_spec(self: "CapabilityRegistry", spec: CapabilitySpec) -> 
     """Register a single declarative CapabilitySpec."""
     target_kind = spec.target.get("kind")
     if target_kind == "python":
+        if "path" not in spec.target:
+            raise CapabilityDefinitionError(
+                f"Capability '{spec.name}': target kind 'python' requires a "
+                f"'path' field (a dotted path to the callable, e.g. "
+                f"'myapp.integrations.stripe.charge_card'). Got keys: "
+                f"{sorted(spec.target)}"
+            )
         func = resolve_dotted(spec.target["path"])
         if not callable(func):
             raise CapabilityDefinitionError(

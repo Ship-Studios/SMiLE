@@ -18,6 +18,9 @@ from smile.capabilities.errors import CapabilityDefinitionError
 from smile.capabilities.infer_description import infer_description
 from smile.capabilities.infer_example import infer_example
 from smile.capabilities.synthesize_example import synthesize_example
+from smile.capabilities.validate_no_namespace_shadowing import (
+    validate_no_namespace_shadowing,
+)
 from smile.capabilities.validate_picklable import validate_picklable
 from smile.capabilities.validate_signature import validate_signature
 from smile.capabilities.wrap_async_capability import wrap_async_capability
@@ -51,6 +54,11 @@ def registry_add(
             f"(from {existing.source}). Use a different name, or a "
             f"`prefix=` when bulk-registering, to avoid the collision."
         )
+
+    # Exact-key duplicates are caught above; this catches the subtler
+    # flat-vs-namespace collision ("crm" alongside "crm.get_customer")
+    # that would otherwise register cleanly and only fail in the sandbox.
+    validate_no_namespace_shadowing(self, exposed_name, source)
 
     validate_signature(func, source=source)
 
