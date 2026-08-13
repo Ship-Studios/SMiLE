@@ -35,8 +35,9 @@ from __future__ import annotations
 from smile.server.main import main
 from smile.server.mcp_instance import mcp
 
-# Import each tool module for its registration side effect.
+# Import each tool/resource module for its registration side effect.
 from smile.server import execute_script as _execute_script  # noqa: F401
+from smile.server import full_result_resource as _full_result_resource  # noqa: F401
 from smile.server import list_capabilities as _list_capabilities  # noqa: F401
 
 __all__ = ["mcp", "main"]

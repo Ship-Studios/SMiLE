@@ -3,43 +3,23 @@
 from __future__ import annotations
 
 from smile.sandbox import run_script
+from smile.server.build_execute_script_description import (
+    build_execute_script_description,
+)
+from smile.server.build_tool_response import build_tool_response
 from smile.server.mcp_instance import mcp
 from smile.server.registry_instance import registry
 
 
-@mcp.tool()
+@mcp.tool(description=build_execute_script_description(registry))
 def execute_script(code: str) -> dict:
     """Execute a Python script in a sandboxed environment.
 
-    The functions listed by list_capabilities() are available directly
-    in the global namespace -- call them like local functions, no
-    imports or client setup needed. Standard control flow (loops,
-    conditionals, comprehensions, exception handling) all work normally.
-
-    To return a value from the script, assign it to a variable named
-    __result__ at any point in your script. Whatever __result__ holds at
-    the end of execution is returned as `return_value`. If you never set
-    it, `return_value` is null and only stdout/stderr are returned.
-
-    The sandbox has no filesystem or network access beyond the injected
-    functions, and no import statement is available -- only the
-    capabilities listed by list_capabilities() and a restricted set of
-    Python builtins.
-
-    Example:
-        enterprise = list_customers(tier="enterprise")
-        results = []
-        for c in enterprise:
-            orders = list_orders(c["id"], status="paid")
-            total = sum(o["amount"] for o in orders)
-            results.append({"customer": c["name"], "total_paid": total})
-        __result__ = results
+    The agent-facing description for this tool is NOT this docstring --
+    it's generated from the served registry by
+    build_execute_script_description() and passed to @mcp.tool(above),
+    so the capability catalog and worked example always match the
+    capabilities actually configured (see load_registry.py). A hardcoded
+    docstring here could only ever describe the bundled demo app.
     """
-    result = run_script(code, registry.namespace())
-    return {
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "return_value": result.return_value,
-        "error": result.error,
-        "timed_out": result.timed_out,
-    }
+    return build_tool_response(run_script(code, registry.namespace()))
