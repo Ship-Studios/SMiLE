@@ -33,3 +33,15 @@ class ServerSettings:
     max_stored_results: int
     """How many full results are retained for resource fetches before the
     oldest are evicted."""
+
+    intent_log_path: str
+    """File each execute_script call's intent/capability-usage record is
+    appended to, as one JSON line per call."""
+
+    max_saved_scripts: int
+    """How many saved scripts the session library may hold before a new
+    name is refused."""
+
+    scripts_dir: str | None
+    """Directory of persisted `{name}.json` saved scripts, or None for
+    an in-memory store that dies with the process."""

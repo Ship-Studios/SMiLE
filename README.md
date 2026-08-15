@@ -121,7 +121,7 @@ rather than behind an LLM. Running as an MCP server, set them in
 
 Everything a consumer needs to tune is an environment variable, set in your
 MCP client's `.mcp.json`. Copy [`.mcp.json.example`](.mcp.json.example) as
-a starting point — it boots as-is against the bundled demo app.
+a starting point — it boots as-is against the bundled repo_tools capability set.
 
 ```json
 {
@@ -133,8 +133,10 @@ a starting point — it boots as-is against the bundled demo app.
         "SMILE_CAPABILITIES": "myapp.integrations.registry:registry",
         "SMILE_RESULT_BUDGET": "12000",
         "SMILE_STREAM_BUDGET": "4000",
-        "SMILE_TIMEOUT_S": "10",
-        "SMILE_MAX_STORED_RESULTS": "32"
+        "SMILE_TIMEOUT_S": "30",
+        "SMILE_MAX_STORED_RESULTS": "32",
+        "SMILE_MAX_SAVED_SCRIPTS": "32",
+        "SMILE_INTENT_LOG": "smile_intent.log"
       }
     }
   }
@@ -147,11 +149,14 @@ a starting point — it boots as-is against the bundled demo app.
 | `SMILE_CAPABILITY_SPEC` | — | Path to a JSON/YAML capability spec file instead. |
 | `SMILE_RESULT_BUDGET` | `12000` | Max characters of `return_value` returned inline; `0` disables. |
 | `SMILE_STREAM_BUDGET` | `4000` | Max characters of stdout and of stderr each; `0` disables. |
-| `SMILE_TIMEOUT_S` | `10` | Seconds a script may run before termination. |
+| `SMILE_TIMEOUT_S` | `30` | Seconds a script may run before termination. |
 | `SMILE_MAX_STORED_RESULTS` | `32` | Full results retained for `smile://results/{id}` fetches. |
+| `SMILE_MAX_SAVED_SCRIPTS` | `32` | Agent-saved functions (`__save__`) the session library may hold. |
+| `SMILE_SCRIPTS_DIR` | — | Directory of `{name}.json` files so saved scripts survive a restart. Unset = memory only. |
+| `SMILE_INTENT_LOG` | `smile_intent.log` | File each `execute_script` call's intent and called capabilities are appended to. |
 
 Set `SMILE_CAPABILITIES` **or** `SMILE_CAPABILITY_SPEC`, not both; with
-neither, the bundled demo CRM is served. Budgets are in characters
+neither, the bundled repo_tools capability set is served. Budgets are in characters
 (~4 chars/token) — raise them if your model has a window larger than the
 100k the defaults assume.
 
@@ -162,6 +167,36 @@ falling back to a default you didn't choose.
 The better fix is usually to aggregate in the script — `__result__ =
 len(orders)` rather than `__result__ = orders` — which is what
 `execute_script`'s tool description now tells the agent to do.
+
+## Reusable scripts
+
+An agent can publish a typed function from inside `execute_script` and
+call it from later scripts as `scripts.<name>(...)` — no extra MCP tool,
+and no `import` (the sandbox has none).
+
+```python
+def doubled(n: int) -> int:
+    """Double a number."""
+    return n * 2
+
+__save__ = True
+__result__ = doubled(3)
+```
+
+Later:
+
+```python
+__result__ = scripts.doubled(4)
+```
+
+`__save__ = "name"` publishes under a different name; `__unpublish__ =
+"name"` removes one. The function needs type hints and a docstring — the
+same bar as an operator-registered capability. `list_capabilities()` is
+the live catalog (`source="saved_script"`); `execute_script`'s tool
+description is built at startup and will not list functions saved later.
+
+By default the library is process-memory only. Set `SMILE_SCRIPTS_DIR` to
+keep `{name}.json` files across restarts.
 
 **Full guide, with examples for every path:** see the
 [Defining capabilities](docs/capabilities.md) docs page, or build the docs

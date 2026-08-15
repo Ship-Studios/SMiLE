@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "smile": {
+      "command": "uv",
+      "args": ["run", "smile-mcp"]
+    }
+  }
+}

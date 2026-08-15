@@ -23,7 +23,7 @@ def load_registry() -> CapabilityRegistry:
           CapabilityRegistry instance -- for capability sets authored in
           Python (decorators, register_module, register_class).
           Importing the module is expected to register everything, the
-          same way importing smile.example_app does.
+          same way importing smile.repo_tools does.
 
       SMILE_CAPABILITY_SPEC=/path/to/capabilities.yaml
           Path to a JSON/YAML capability spec file (see
@@ -31,8 +31,8 @@ def load_registry() -> CapabilityRegistry:
           Python wrapper code at all.
 
     Setting both is an error -- pick one source. Setting neither falls
-    back to smile.example_app's registry (the bundled demo capability
-    set), preserving the pre-existing default behavior.
+    back to smile.repo_tools's registry (capabilities for working in
+    this repository itself: introspection, git, GitHub, tests).
     """
     dotted_path = os.environ.get(ENV_CAPABILITIES)
     spec_path = os.environ.get(ENV_CAPABILITY_SPEC)
@@ -57,6 +57,6 @@ def load_registry() -> CapabilityRegistry:
         registry.load_specs(spec_path)
         return registry
 
-    from smile.example_app import registry as default_registry
+    from smile.repo_tools import registry as default_registry
 
     return default_registry

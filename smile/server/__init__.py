@@ -7,10 +7,14 @@ Exposes two tools to any MCP client:
       Returns the structured catalog of functions available inside the
       sandbox -- names, type-stub signatures, descriptions, examples.
 
-  execute_script(code)
+  execute_script(code, intent)
       Runs agent-authored Python against that capability namespace in a
       sandboxed subprocess (see smile/sandbox/) and returns stdout/
-      stderr/return value/error.
+      stderr/return value/error. `intent` is a required plain-English
+      sentence describing the script's goal, logged alongside the
+      capabilities the script actually called (see log_intent.py).
+      `__save__` / `__unpublish__` publish or remove a function on
+      `scripts.*` for later calls (see perform_execute_script.py).
 
 Run with:  uv run mcp dev smile/server/__init__.py   (MCP Inspector, for manual testing)
        or: uv run python3 -m smile.server            (stdio server, for a real client)
@@ -20,7 +24,7 @@ load_registry() (registry_instance.py) from environment config, so a
 consumer of the packaged smile-mcp entry point can supply their own
 capabilities without forking SMiLE -- see load_registry.py for the
 SMILE_CAPABILITIES / SMILE_CAPABILITY_SPEC env vars. With neither set,
-it falls back to smile.example_app's bundled demo registry.
+it falls back to smile.repo_tools's registry for working in this repo.
 
 This package follows the project's one-function/method-per-file rule
 (see CLAUDE.md): each tool lives in its own module, registered against

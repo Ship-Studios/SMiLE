@@ -288,3 +288,35 @@ is purely additive.
   `__init__.py` files reassemble the pre-restructure public surface, so
   imports like `from smile.capabilities import CapabilityRegistry` are
   unaffected.
+
+## Agent-saved scripts
+
+Operator capabilities are curated at startup. An agent can also **publish
+a function from inside `execute_script`** and call it later as
+`scripts.<name>(...)`:
+
+```python
+def doubled(n: int) -> int:
+    """Double a number."""
+    return n * 2
+
+__save__ = True
+__result__ = doubled(3)
+```
+
+That is not a sixth registration path on `CapabilityRegistry`. Saved
+scripts live in a separate `ScriptStore`, stay under the reserved
+`scripts` prefix so they cannot shadow `grep` / `get_customer`, and
+appear in `list_capabilities()` with `source="saved_script"`. They must
+meet the same type-hint and docstring bar as a capability — the catalog
+stub is generated from the AST, not from executing the agent’s code in
+the parent process.
+
+`__save__ = "name"` publishes under a different name. `__unpublish__ =
+"name"` removes one. Overwriting a name replaces the function. The store
+refuses a new name once `SMILE_MAX_SAVED_SCRIPTS` is reached (default 32)
+rather than evicting — a later script still calling `scripts.foo()` would
+otherwise become an `AttributeError` with no marker.
+
+By default the library dies with the MCP process. Set `SMILE_SCRIPTS_DIR`
+to persist each function as `{name}.json` and reload on the next boot.

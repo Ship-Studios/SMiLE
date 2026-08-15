@@ -70,8 +70,10 @@ Three layers, each independent enough to reason about alone:
 
 3. **`smile/server/`** — the MCP server (`mcp.server.mcpserver.MCPServer`, not the older `FastMCP` —
    the installed `mcp` package renamed it in this major version). Exposes `list_capabilities()` (returns
-   the structured catalog) and `execute_script(code)` (runs it via `run_script` against
-   `registry.namespace()`). `execute_script`'s tool description is itself the API reference the agent
+   the structured catalog) and `execute_script(code, intent)` (runs `code` via `run_script` against
+   `registry.namespace()`; `intent` is a required plain-English sentence describing the script's goal,
+   logged alongside the capabilities the script actually called — see `smile/server/log_intent.py`).
+   `execute_script`'s tool description is itself the API reference the agent
    reads before writing code — this is deliberate: MCP's native discovery (`tools/list`) is built for
    "one tool, one call," so the capability catalog is pushed into the tool description / a companion
    tool rather than expressed as separate MCP tools per capability. That description is **generated**
@@ -80,6 +82,16 @@ Three layers, each independent enough to reason about alone:
    (`SMILE_CAPABILITIES`/`SMILE_CAPABILITY_SPEC`), a hardcoded docstring could only ever describe the
    bundled demo app, and would hand every other consumer a worked example calling functions that don't
    exist for them.
+
+   A script that defines exactly one top-level typed function and assigns `__save__ = True` (or
+   `__save__ = "name"`) is published as `scripts.<name>` for later `execute_script` calls in this
+   process — and across restarts if `SMILE_SCRIPTS_DIR` is set. `__unpublish__ = "name"` removes one.
+   Saved scripts are **not** operator capabilities: they live in `ScriptStore` (`smile/server/script_store.py`),
+   are hydrated inside the sandbox child from picklable `SavedScriptRecord`s (closures built in the parent
+   would fail `spawn`'s pickle), and show up in `list_capabilities()` with `source="saved_script"`.
+   `extract_called_capabilities` walks saved bodies transitively so the intent log names the inner
+   operator capabilities, not just `scripts.foo`. The reserved `scripts` namespace is refused if the
+   operator registry already owns it.
 
 ### Four ways to register a capability (increasing leverage)
 
@@ -132,7 +144,8 @@ cost 47k tokens. Two layers address this:
    are sized against a **100k-token context window** — the conservative planning assumption, not the
    largest window available, since a budget tuned to a big window misbehaves silently on a smaller one.
    Consumers override them per-deployment via env vars in `.mcp.json` (`SMILE_RESULT_BUDGET`,
-   `SMILE_STREAM_BUDGET`, `SMILE_TIMEOUT_S`, `SMILE_MAX_STORED_RESULTS`) — resolved once at import time
+   `SMILE_STREAM_BUDGET`, `SMILE_TIMEOUT_S`, `SMILE_MAX_STORED_RESULTS`, `SMILE_MAX_SAVED_SCRIPTS`,
+   `SMILE_SCRIPTS_DIR`) — resolved once at import time
    by `load_settings()` into a frozen `ServerSettings` (`settings_instance.py`), the same shape
    `load_registry()`/`registry_instance.py` already use. Malformed values raise at **startup** rather
    than falling back to a default: a silently ignored budget produces results truncated at a size the
@@ -194,12 +207,52 @@ and `registry_add`'s exact-key duplicate check never sees it (they're different 
 `validate_no_namespace_shadowing()` catches at registration time. Ordinary siblings sharing a prefix
 (`crm.a` + `crm.b`) are fine and must keep working — only the bare namespace head collides.
 
-### `smile/example_app/`
+### `smile/repo_tools/`
 
-A fake in-memory CRM (customers/orders/email, all in module-level dicts in `data.py`, reset on server
-restart) used as the live capability set for `smile/server/` and as the target of `tests/e2e_gemini.py`.
-Every capability here uses bare `@registry.register` with no explicit `description=`/`example=` — it's
-meant to double as a working example of what capability authors should write.
+The default capability set served by `smile/server/` when no `SMILE_CAPABILITIES`/`SMILE_CAPABILITY_SPEC`
+is configured — capabilities for working inside the SMiLE repository itself rather than a demo app:
+
+- **Introspection**: `list_files(pattern)`, `read_file(path, start_line, end_line)`, `grep(pattern,
+  path_glob)` — `grep` walks the filesystem directly (not `git grep`) so untracked/unstaged files are
+  searched too, which matters for an agent actively writing new files.
+- **Git**: `git_status()`, `git_diff(staged)`, `git_log(max_count)`, `git_show(ref)`.
+- **GitHub** (via the `gh` CLI): `list_prs(state)`, `get_pr(number)`, `list_issues(state)` —
+  `list_prs` / `list_issues` return `[]` only when the `gh` binary is not installed; any other
+  non-zero `gh` exit (no remote, not authenticated, bad `--state`) raises `RuntimeError`.
+  `get_pr` never returns `[]` — missing `gh`, a missing PR (`NotFoundError`), and other
+  operational failures all raise. A consumer without `gh` can still use every other
+  capability; a script that only calls the list helpers sees an empty list rather than
+  an exception.
+- **Dev loop**: `run_tests()`, running `tests/test_capabilities.py` in a subprocess with
+  its own timeout (capped at `SMILE_TIMEOUT_S`, default 30s — sized to fit the suite)
+  and output truncation (reusing `smile/sandbox/truncate_stream.py`).
+
+Every path-accepting capability resolves through `resolve_repo_path.py` (or
+`validate_repo_glob.py` / `walk_repo_glob.py` for glob walkers), which confines it
+to the repository root (`repo_root.py`) and raises `PathEscapesRepoError` on anything
+that would escape (symlinks included, since `Path.resolve()` follows them before the
+containment check). Glob walkers prune `.git` / `__pycache__` / `.venv` / `node_modules`
+*before* descending, using in-repo path parts only (so a checkout living under a
+directory of those names is not treated as empty), and do not walk symlink directories
+that resolve outside the repo. An explicitly named glob prefix that resolves outside
+raises rather than walking the target and filtering results. These functions execute
+inside the sandbox child — they are pickled into the capability namespace — with the
+host process's filesystem permissions, unlike the rest of the sandboxed script, which
+has none.
+
+Every git/gh/test capability shells out through the shared `run_subprocess.py`
+helper with a fixed argv list (never `shell=True`, never a caller-built command
+string). User-supplied tokens that could be parsed as options (e.g. `git show`
+refs) are rejected if they start with `-` and passed after
+`--end-of-options` so they cannot become git switches. `--` is the
+path-separator, not an option terminator, for `git show`. Subprocesses start in their own
+process group and are killed as a group on timeout or when the sandbox worker
+is terminated; their timeout is capped at `SMILE_TIMEOUT_S` so they cannot
+outlive the script budget.
+
+Every capability here uses bare `@registry.register` with no explicit `description=`/`example=` —
+consistent with the project's own intended common case (description/example inferred from the
+docstring).
 
 ## STRICT GUIDELINE: one method per file
 

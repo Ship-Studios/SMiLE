@@ -860,8 +860,8 @@ def test_http_spec_undeclared_template_param_raises() -> None:
 def test_execute_script_description_reflects_served_registry() -> None:
     """The description an agent reads before writing a script has to
     describe the registry actually being served -- it used to be a
-    hardcoded docstring naming the bundled demo app's capabilities, which
-    are wrong for any consumer supplying their own capability set via
+    hardcoded docstring naming one bundled capability set, which
+    is wrong for any consumer supplying their own via
     SMILE_CAPABILITIES / SMILE_CAPABILITY_SPEC."""
     from smile.server.build_execute_script_description import (
         build_execute_script_description,
@@ -875,13 +875,34 @@ def test_execute_script_description_reflects_served_registry() -> None:
         "def get_widget(widget_id: str) -> dict: ..." in description,
         "description: the served registry's stub signatures are embedded",
     )
-    check(
-        "list_customers" not in description,
-        "description: no leftover hardcoded example_app capability names",
+    leftovers = (
+        "list_customers",
+        "list_orders",
+        "get_customer",
+        "refund_order",
+        "list_files",
+        "git_status",
     )
+    for leftover in leftovers:
+        check(
+            leftover not in description,
+            f"description: {leftover} is not in this registry and must not appear",
+        )
     check(
         "__result__" in description,
         "description: the __result__ return convention is still explained",
+    )
+    check(
+        "__save__" in description,
+        "description: the __save__ publish convention is explained",
+    )
+    check(
+        "__unpublish__" in description,
+        "description: the __unpublish__ convention is explained",
+    )
+    check(
+        "scripts." in description,
+        "description: saved scripts are called under the scripts namespace",
     )
 
 
@@ -1128,6 +1149,7 @@ def test_settings_default_when_unset() -> None:
         f"settings: unset env falls back to the built-in default "
         f"(got {settings.result_budget})",
     )
+    check(settings.scripts_dir is None, "settings: unset SMILE_SCRIPTS_DIR stays None")
 
 
 def test_settings_read_from_environment() -> None:
@@ -1136,6 +1158,7 @@ def test_settings_read_from_environment() -> None:
         SMILE_STREAM_BUDGET="1000",
         SMILE_TIMEOUT_S="2.5",
         SMILE_MAX_STORED_RESULTS="4",
+        SMILE_MAX_SAVED_SCRIPTS="8",
     )
     check(settings.result_budget == 50000, "settings: SMILE_RESULT_BUDGET is applied")
     check(settings.stream_budget == 1000, "settings: SMILE_STREAM_BUDGET is applied")
@@ -1144,6 +1167,11 @@ def test_settings_read_from_environment() -> None:
         settings.max_stored_results == 4,
         "settings: SMILE_MAX_STORED_RESULTS is applied",
     )
+    check(
+        settings.max_saved_scripts == 8,
+        "settings: SMILE_MAX_SAVED_SCRIPTS is applied",
+    )
+    check(settings.scripts_dir is None, "settings: unset SMILE_SCRIPTS_DIR is memory-only")
 
 
 def test_settings_accept_underscore_separators() -> None:
@@ -1181,6 +1209,28 @@ def test_settings_reject_nonpositive_timeout() -> None:
                 "greater than zero" in str(exc),
                 f"settings: non-positive timeout rejected (got {exc})",
             )
+
+
+def test_settings_reject_empty_script_store() -> None:
+    try:
+        _with_env(SMILE_MAX_SAVED_SCRIPTS="0")
+        check(False, "settings: SMILE_MAX_SAVED_SCRIPTS=0 should raise")
+    except CapabilityDefinitionError as exc:
+        check(
+            "at least 1" in str(exc),
+            f"settings: empty script store rejected (got {exc})",
+        )
+
+
+def test_settings_scripts_dir_is_created() -> None:
+    import tempfile
+    from pathlib import Path as _Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = str(_Path(tmp) / "scripts")
+        settings = _with_env(SMILE_SCRIPTS_DIR=target)
+        check(settings.scripts_dir == target, "settings: SMILE_SCRIPTS_DIR is applied")
+        check(_Path(target).is_dir(), "settings: a missing SMILE_SCRIPTS_DIR is created")
 
 
 def test_settings_reject_empty_result_store() -> None:
@@ -1228,7 +1278,7 @@ def test_example_mcp_json_is_valid_and_bootable() -> None:
     )
     check(
         "SMILE_CAPABILITIES" not in active and "SMILE_CAPABILITY_SPEC" not in active,
-        "example: ships with no capability source set, so it boots against the demo app",
+        "example: ships with no capability source set, so it boots against the bundled repo_tools set",
     )
 
     settings = _with_env(**active)
@@ -1236,6 +1286,1119 @@ def test_example_mcp_json_is_valid_and_bootable() -> None:
         settings.result_budget > 0 and settings.timeout_s > 0,
         "example: the shipped values load as valid settings",
     )
+
+
+# --------------------------------------------------------------------------
+# 16. Intent logging (dotted_call_name, extract_called_capabilities, log_intent)
+# --------------------------------------------------------------------------
+
+
+def test_dotted_call_name_flat_and_namespaced() -> None:
+    import ast
+
+    from smile.server.dotted_call_name import dotted_call_name
+
+    flat_call = ast.parse("foo(1)").body[0].value
+    namespaced_call = ast.parse("crm.get_customer(1)").body[0].value
+    chained_call = ast.parse("a.b.c(1)").body[0].value
+    subscript_call = ast.parse("funcs[0](1)").body[0].value
+
+    check(dotted_call_name(flat_call.func) == "foo", "dotted_call_name: flat Name resolves to its id")
+    check(
+        dotted_call_name(namespaced_call.func) == "crm.get_customer",
+        "dotted_call_name: Attribute-on-Name resolves to 'namespace.attr'",
+    )
+    check(
+        dotted_call_name(chained_call.func) is None,
+        "dotted_call_name: a chained attribute (a.b.c) is not a valid capability shape",
+    )
+    check(
+        dotted_call_name(subscript_call.func) is None,
+        "dotted_call_name: a call through a subscript is not a valid capability shape",
+    )
+
+
+def test_extract_called_capabilities_matches_flat_and_namespaced_calls() -> None:
+    from smile.server.extract_called_capabilities import extract_called_capabilities
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    registry.register(_crm_method, name="crm.get_customer")
+
+    called = extract_called_capabilities(
+        "x = echo(1)\ny = crm.get_customer(2)\nz = echo(3)", registry
+    )
+    check(
+        called == ["crm.get_customer", "echo"],
+        f"extract_called_capabilities: finds flat and namespaced call sites, sorted and deduplicated (got {called})",
+    )
+
+
+def test_extract_called_capabilities_ignores_unregistered_names() -> None:
+    from smile.server.extract_called_capabilities import extract_called_capabilities
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+
+    called = extract_called_capabilities("x = echo(1)\ny = len([1, 2])\nz = some_var(3)", registry)
+    check(
+        called == ["echo"],
+        f"extract_called_capabilities: only registered capability names are reported (got {called})",
+    )
+
+
+def test_extract_called_capabilities_reference_without_call_not_counted() -> None:
+    from smile.server.extract_called_capabilities import extract_called_capabilities
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+
+    called = extract_called_capabilities("f = echo\n__result__ = f", registry)
+    check(
+        called == [],
+        f"extract_called_capabilities: a capability merely referenced, not called, is not counted (got {called})",
+    )
+
+
+def test_extract_called_capabilities_handles_syntax_error() -> None:
+    from smile.server.extract_called_capabilities import extract_called_capabilities
+
+    registry = CapabilityRegistry()
+    called = extract_called_capabilities("def broken(:\n", registry)
+    check(
+        called == [],
+        f"extract_called_capabilities: unparseable code returns an empty list rather than raising (got {called})",
+    )
+
+
+def test_log_intent_writes_one_json_line_with_expected_fields() -> None:
+    import json
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.server.log_intent import log_intent
+    from smile.sandbox import run_script
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    result = run_script("__result__ = echo(1)", registry.namespace())
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = str(_Path(tmp) / "intent.log")
+        log_intent(log_path, "echo a value", "__result__ = echo(1)", ["echo"], result)
+
+        lines = _Path(log_path).read_text().splitlines()
+        check(len(lines) == 1, f"log_intent: one call appends exactly one JSON line (got {len(lines)})")
+
+        record = json.loads(lines[0])
+        check(record["intent"] == "echo a value", "log_intent: records the stated intent")
+        check(record["code"] == "__result__ = echo(1)", "log_intent: records the executed code")
+        check(record["called_capabilities"] == ["echo"], "log_intent: records the extracted capability list")
+        check(record["error"] is None, "log_intent: records the script's error (None on success)")
+        check(record["timed_out"] is False, "log_intent: records whether the script timed out")
+        check("timestamp" in record, "log_intent: records a timestamp")
+
+        log_intent(log_path, "echo again", "__result__ = echo(2)", ["echo"], result)
+        lines_after = _Path(log_path).read_text().splitlines()
+        check(len(lines_after) == 2, "log_intent: subsequent calls append rather than overwrite")
+
+
+def test_log_intent_truncates_oversized_code() -> None:
+    import json
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.server.constants import INTENT_LOG_CODE_BUDGET
+    from smile.server.log_intent import log_intent
+    from smile.sandbox import run_script
+
+    registry = CapabilityRegistry()
+    result = run_script("__result__ = 1", registry.namespace())
+    long_code = "x = 1\n" * 2000
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = str(_Path(tmp) / "intent.log")
+        log_intent(log_path, "long script", long_code, [], result)
+
+        record = json.loads(_Path(log_path).read_text().splitlines()[0])
+        check(
+            len(record["code"]) < len(long_code),
+            f"log_intent: oversized code is shortened before logging (logged {len(record['code'])}, "
+            f"original {len(long_code)})",
+        )
+        check(
+            len(record["code"]) <= INTENT_LOG_CODE_BUDGET + 200,
+            "log_intent: truncated code stays close to the configured budget",
+        )
+        check(
+            "truncated" in record["code"],
+            "log_intent: truncated code carries an inline marker naming what was dropped",
+        )
+
+
+def test_log_intent_truncates_oversized_intent() -> None:
+    import json
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.server.constants import INTENT_LOG_INTENT_BUDGET
+    from smile.server.log_intent import log_intent
+    from smile.sandbox import run_script
+
+    registry = CapabilityRegistry()
+    result = run_script("__result__ = 1", registry.namespace())
+    long_intent = "please " * 200
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = str(_Path(tmp) / "intent.log")
+        log_intent(log_path, long_intent, "__result__ = 1", [], result)
+
+        record = json.loads(_Path(log_path).read_text().splitlines()[0])
+        check(
+            len(record["intent"]) < len(long_intent),
+            f"log_intent: oversized intent is shortened before logging "
+            f"(logged {len(record['intent'])}, original {len(long_intent)})",
+        )
+        check(
+            len(record["intent"]) <= INTENT_LOG_INTENT_BUDGET + 200,
+            "log_intent: truncated intent stays close to the configured budget",
+        )
+        check(
+            "truncated" in record["intent"],
+            "log_intent: truncated intent carries an inline marker naming what was dropped",
+        )
+
+
+def test_log_intent_truncates_oversized_error() -> None:
+    import json
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.sandbox.script_result import ScriptResult
+    from smile.server.constants import INTENT_LOG_ERROR_BUDGET
+    from smile.server.log_intent import log_intent
+
+    long_error = "boom\n" * 2000
+    result = ScriptResult(
+        stdout="",
+        stderr="",
+        return_value=None,
+        error=long_error,
+        timed_out=False,
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = str(_Path(tmp) / "intent.log")
+        log_intent(log_path, "failed script", "__result__ = 1", [], result)
+
+        record = json.loads(_Path(log_path).read_text().splitlines()[0])
+        check(
+            record["error"] is not None and len(record["error"]) < len(long_error),
+            f"log_intent: oversized error is shortened before logging "
+            f"(logged {len(record['error'] or '')}, original {len(long_error)})",
+        )
+        check(
+            len(record["error"] or "") <= INTENT_LOG_ERROR_BUDGET + 200,
+            "log_intent: truncated error stays close to the configured budget",
+        )
+        check(
+            "truncated" in (record["error"] or ""),
+            "log_intent: truncated error carries an inline marker naming what was dropped",
+        )
+
+
+def test_log_intent_swallows_write_failure() -> None:
+    from smile.server.log_intent import log_intent
+    from smile.sandbox import run_script
+
+    registry = CapabilityRegistry()
+    result = run_script("__result__ = 1", registry.namespace())
+
+    try:
+        log_intent("/no/such/directory/intent.log", "test", "__result__ = 1", [], result)
+        check(True, "log_intent: a write failure (bad path) is swallowed, not raised")
+    except OSError:
+        check(False, "log_intent: a write failure (bad path) is swallowed, not raised")
+
+
+def test_load_settings_rejects_intent_log_path_with_missing_parent() -> None:
+    try:
+        _with_env(SMILE_INTENT_LOG="/no/such/directory/intent.log")
+        check(False, "settings: SMILE_INTENT_LOG with a missing parent directory should raise")
+    except CapabilityDefinitionError as exc:
+        check(
+            "SMILE_INTENT_LOG" in str(exc),
+            f"settings: bad intent log path is rejected at startup, naming the variable (got {exc})",
+        )
+
+
+def test_load_settings_accepts_intent_log_path_with_existing_parent() -> None:
+    import tempfile
+    from pathlib import Path as _Path
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = str(_Path(tmp) / "intent.log")
+        settings = _with_env(SMILE_INTENT_LOG=log_path)
+        check(
+            settings.intent_log_path == log_path,
+            f"settings: a valid SMILE_INTENT_LOG path is accepted (got {settings.intent_log_path})",
+        )
+
+
+# --------------------------------------------------------------------------
+# 17. repo_tools path confinement, argv hygiene, subprocess failures
+# --------------------------------------------------------------------------
+
+
+def test_resolve_repo_path_rejects_escape() -> None:
+    from smile.repo_tools.errors import PathEscapesRepoError
+    from smile.repo_tools.repo_root import REPO_ROOT
+    from smile.repo_tools.resolve_repo_path import resolve_repo_path
+
+    try:
+        resolve_repo_path("/etc/passwd")
+        check(False, "resolve_repo_path: absolute path outside the repo should raise")
+    except PathEscapesRepoError:
+        check(True, "resolve_repo_path: absolute path outside the repo raises PathEscapesRepoError")
+
+    try:
+        resolve_repo_path("../")
+        check(False, "resolve_repo_path: parent-directory path should raise")
+    except PathEscapesRepoError:
+        check(True, "resolve_repo_path: parent-directory path raises PathEscapesRepoError")
+
+    resolved = resolve_repo_path("pyproject.toml")
+    check(
+        resolved == (REPO_ROOT / "pyproject.toml").resolve(),
+        "resolve_repo_path: a repo-relative file resolves inside REPO_ROOT",
+    )
+
+
+def test_list_files_and_grep_reject_escaping_globs() -> None:
+    from smile.repo_tools.errors import PathEscapesRepoError
+    from smile.repo_tools.grep import grep
+    from smile.repo_tools.list_files import list_files
+
+    try:
+        list_files("../*")
+        check(False, "list_files: '../*' should raise rather than walk the parent")
+    except PathEscapesRepoError:
+        check(True, "list_files: '../*' raises PathEscapesRepoError")
+
+    try:
+        list_files("/etc/*")
+        check(False, "list_files: an absolute glob should raise")
+    except PathEscapesRepoError:
+        check(True, "list_files: an absolute glob raises PathEscapesRepoError")
+
+    try:
+        grep("x", "../*")
+        check(False, "grep: '../*' should raise rather than walk the parent")
+    except PathEscapesRepoError:
+        check(True, "grep: '../*' raises PathEscapesRepoError")
+
+
+def test_is_ignored_repo_path_uses_relative_parts() -> None:
+    from pathlib import Path as _Path
+
+    from smile.repo_tools.is_ignored_repo_path import is_ignored_repo_path
+
+    root = _Path("/tmp/node_modules/SMiLE")
+    check(
+        not is_ignored_repo_path(root / "smile" / "foo.py", root),
+        "is_ignored_repo_path: an ancestor named node_modules does not hide the repo",
+    )
+    check(
+        is_ignored_repo_path(root / ".git" / "objects" / "ab", root),
+        "is_ignored_repo_path: an in-repo .git path is ignored",
+    )
+    check(
+        is_ignored_repo_path(_Path("/etc/passwd"), root),
+        "is_ignored_repo_path: a path outside the root is ignored",
+    )
+
+
+def test_list_files_matches_repo_relative_globs() -> None:
+    from smile.repo_tools.list_files import list_files
+
+    check(
+        list_files("README.md") == ["README.md"],
+        "list_files: an exact filename matches only that file",
+    )
+    one_level = list_files("smile/repo_tools/*.py")
+    check(
+        "smile/repo_tools/list_files.py" in one_level,
+        "list_files: a one-level glob finds files in that directory",
+    )
+    check(
+        all(p.startswith("smile/repo_tools/") and p.endswith(".py") for p in one_level),
+        "list_files: a one-level glob does not recurse",
+    )
+    recursive = list_files("**/*.py")
+    check(
+        "smile/repo_tools/list_files.py" in recursive,
+        "list_files: **/*.py finds nested python files",
+    )
+    check(
+        not any(p == "README.md" or p.endswith(".md") and "/" not in p for p in recursive),
+        "list_files: **/*.py does not include non-python files",
+    )
+    all_files = list_files("**/*")
+    check(
+        not any(part == ".git" for path in all_files for part in path.split("/")),
+        "list_files: **/* prunes .git before descending",
+    )
+
+
+def test_list_files_rejects_escaping_symlink_prefix() -> None:
+    from smile.repo_tools.errors import PathEscapesRepoError
+    from smile.repo_tools.list_files import list_files
+    from smile.repo_tools.repo_root import REPO_ROOT
+
+    link = REPO_ROOT / ".smile_test_escape_link"
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    link.symlink_to("/etc")
+    try:
+        try:
+            list_files(".smile_test_escape_link/**/*")
+            check(False, "list_files: a symlink prefix to /etc should raise")
+        except PathEscapesRepoError:
+            check(True, "list_files: a symlink prefix to /etc raises PathEscapesRepoError")
+
+        listed = list_files("**/*")
+        check(
+            not any(p.startswith(".smile_test_escape_link") for p in listed),
+            "list_files: **/* does not walk an escaping symlink directory",
+        )
+    finally:
+        if link.is_symlink() or link.exists():
+            link.unlink()
+
+
+def test_git_log_rejects_invalid_max_count() -> None:
+    from smile.repo_tools.git_log import git_log
+
+    for bad in (0, -1, 501):
+        try:
+            git_log(max_count=bad)
+            check(False, f"git_log: max_count={bad} should raise")
+        except ValueError:
+            check(True, f"git_log: max_count={bad} raises ValueError")
+
+    lines = git_log(max_count=1)
+    check(len(lines) == 1, f"git_log: max_count=1 returns one commit (got {len(lines)})")
+
+
+def test_get_pr_rejects_non_positive_number() -> None:
+    from smile.repo_tools.get_pr import get_pr
+
+    for bad in (0, -1):
+        try:
+            get_pr(bad)
+            check(False, f"get_pr: number={bad} should raise")
+        except ValueError as exc:
+            check(
+                "positive" in str(exc).lower(),
+                f"get_pr: number={bad} raises ValueError naming the constraint (got {exc})",
+            )
+
+
+def test_git_show_rejects_option_like_ref() -> None:
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.repo_tools.git_show import git_show
+
+    with tempfile.TemporaryDirectory() as tmp:
+        target = _Path(tmp) / "pwned"
+        try:
+            git_show(f"--output={target}")
+            check(False, "git_show: option-like ref should be rejected")
+        except ValueError as exc:
+            check(
+                "option" in str(exc).lower(),
+                f"git_show: option-like ref raises ValueError (got {exc})",
+            )
+        check(
+            not target.exists(),
+            "git_show: a --output= ref must not write a file",
+        )
+
+    shown = git_show("HEAD")
+    check(
+        shown.lstrip().startswith("commit "),
+        "git_show: a real ref still returns the commit (not treated as a path)",
+    )
+
+
+def test_require_subprocess_success_raises_on_failure() -> None:
+    from smile.repo_tools.require_subprocess_success import require_subprocess_success
+
+    try:
+        require_subprocess_success(
+            {"returncode": None, "stdout": "", "stderr": "", "timed_out": True},
+            "git diff",
+        )
+        check(False, "require_subprocess_success: timed_out should raise")
+    except RuntimeError as exc:
+        check(
+            "timed out" in str(exc),
+            f"require_subprocess_success: timeout is named in the error (got {exc})",
+        )
+
+    try:
+        require_subprocess_success(
+            {
+                "returncode": 128,
+                "stdout": "",
+                "stderr": "fatal: not a git repository",
+                "timed_out": False,
+            },
+            "git status",
+        )
+        check(False, "require_subprocess_success: non-zero returncode should raise")
+    except RuntimeError as exc:
+        check(
+            "not a git repository" in str(exc),
+            f"require_subprocess_success: stderr is included (got {exc})",
+        )
+
+    require_subprocess_success(
+        {"returncode": 0, "stdout": "", "stderr": "", "timed_out": False},
+        "git log",
+    )
+    check(True, "require_subprocess_success: zero-exit success does not raise")
+
+
+def test_run_subprocess_missing_binary_is_not_success() -> None:
+    from smile.repo_tools.require_subprocess_success import require_subprocess_success
+    from smile.repo_tools.run_subprocess import run_subprocess
+
+    result = run_subprocess(["smile-definitely-not-a-command"])
+    check(
+        result["returncode"] != 0 and not result["timed_out"],
+        "run_subprocess: a missing binary is not a zero-exit success",
+    )
+    try:
+        require_subprocess_success(result, "missing binary")
+        check(False, "require_subprocess_success: missing binary should raise")
+    except RuntimeError:
+        check(True, "require_subprocess_success: missing binary raises RuntimeError")
+
+
+def test_run_subprocess_kills_process_group_on_timeout() -> None:
+    import os
+    import sys
+    import tempfile
+    import time
+    from pathlib import Path as _Path
+
+    from smile.repo_tools.run_subprocess import run_subprocess
+
+    with tempfile.TemporaryDirectory() as tmp:
+        pidfile = _Path(tmp) / "child.pid"
+        code = (
+            "import os, subprocess, sys, time\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])\n"
+            f"open({str(pidfile)!r}, 'w').write(str(child.pid))\n"
+            "time.sleep(60)\n"
+        )
+        result = run_subprocess([sys.executable, "-c", code], timeout_s=1.5)
+        check(result["timed_out"] is True, "run_subprocess: timeout is reported")
+
+        deadline = time.monotonic() + 2.0
+        while not pidfile.exists() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        check(pidfile.exists(), "run_subprocess: grandchild pid was recorded before the timeout")
+        pid = int(pidfile.read_text())
+        time.sleep(0.2)
+        try:
+            os.kill(pid, 0)
+            alive = True
+        except ProcessLookupError:
+            alive = False
+        check(not alive, "run_subprocess: grandchild does not survive a timeout")
+
+
+def test_cap_subprocess_timeout_honors_smile_timeout() -> None:
+    import os
+
+    from smile.repo_tools.cap_subprocess_timeout import cap_subprocess_timeout
+
+    saved = os.environ.get("SMILE_TIMEOUT_S")
+    try:
+        os.environ["SMILE_TIMEOUT_S"] = "0.5"
+        check(
+            cap_subprocess_timeout(120) == 0.5,
+            "cap_subprocess_timeout: requested budget is capped at SMILE_TIMEOUT_S",
+        )
+    finally:
+        if saved is None:
+            os.environ.pop("SMILE_TIMEOUT_S", None)
+        else:
+            os.environ["SMILE_TIMEOUT_S"] = saved
+
+
+def test_enforce_run_tests_interval_blocks_rapid_retries() -> None:
+    import tempfile
+    import time
+    from pathlib import Path as _Path
+
+    from smile.repo_tools.enforce_run_tests_interval import enforce_run_tests_interval
+
+    with tempfile.TemporaryDirectory() as tmp:
+        stamp = _Path(tmp) / "stamp"
+        enforce_run_tests_interval(0.2, stamp)
+        try:
+            enforce_run_tests_interval(0.2, stamp)
+            check(False, "enforce_run_tests_interval: second call within the floor should raise")
+        except RuntimeError as exc:
+            check(
+                "too recently" in str(exc),
+                f"enforce_run_tests_interval: rapid retry is rejected (got {exc})",
+            )
+        time.sleep(0.25)
+        try:
+            enforce_run_tests_interval(0.2, stamp)
+            check(True, "enforce_run_tests_interval: a call after the floor elapses succeeds")
+        except RuntimeError:
+            check(False, "enforce_run_tests_interval: a call after the floor elapses succeeds")
+
+
+def test_registry_capability_names_matches_namespace_keys() -> None:
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    registry.register(_crm_method, name="crm.get_customer")
+
+    names = registry.capability_names()
+    check(
+        names == {"echo", "crm.get_customer"},
+        f"capability_names: exposes the same keys namespace()/collect() use internally (got {names})",
+    )
+
+
+# --------------------------------------------------------------------------
+# 18. Reusable scripts (__save__, scripts.*, transitive intent)
+# --------------------------------------------------------------------------
+
+
+def _script_settings(log_path: str):
+    from smile.server.server_settings import ServerSettings
+
+    return ServerSettings(
+        result_budget=12_000,
+        stream_budget=4_000,
+        timeout_s=10.0,
+        max_stored_results=8,
+        intent_log_path=log_path,
+        max_saved_scripts=32,
+        scripts_dir=None,
+    )
+
+
+_SAVE_DOUBLE = """
+def doubled(n: int) -> int:
+    \"\"\"Double n via echo so the call is visible to intent logging.\"\"\"
+    return echo(n) + echo(n)
+
+__save__ = True
+__result__ = doubled(3)
+"""
+
+_SAVE_DOUBLE_RENAMED = """
+def compute(n: int) -> int:
+    \"\"\"Double n, published under a different name.\"\"\"
+    return echo(n) + echo(n)
+
+__save__ = "doubled"
+__result__ = compute(3)
+"""
+
+
+def test_parse_save_request_true_and_rename() -> None:
+    from smile.server.parse_save_request import parse_save_request
+
+    req = parse_save_request(_SAVE_DOUBLE)
+    check(req is not None, "parse_save_request: __save__ = True is a save request")
+    assert req is not None
+    check(req.name == "doubled", f"parse_save_request: name defaults to the def name (got {req.name})")
+    check(req.func_name == "doubled", "parse_save_request: func_name is the def name")
+    check(
+        req.description.startswith("Double n"),
+        f"parse_save_request: description comes from the docstring (got {req.description!r})",
+    )
+    check(
+        req.signature == "scripts.doubled(n: int) -> int",
+        f"parse_save_request: call-style signature (got {req.signature!r})",
+    )
+    check(
+        "def doubled" in req.source and "__save__" not in req.source,
+        "parse_save_request: stored source is the function only",
+    )
+
+    renamed = parse_save_request(_SAVE_DOUBLE_RENAMED)
+    check(renamed is not None and renamed.name == "doubled", "parse_save_request: __save__ = 'name' renames")
+    check(renamed is not None and renamed.func_name == "compute", "parse_save_request: func_name stays the def name")
+
+
+def test_parse_save_request_absent_or_false() -> None:
+    from smile.server.parse_save_request import parse_save_request
+
+    check(parse_save_request("__result__ = 1") is None, "parse_save_request: no __save__ is not a save")
+    check(
+        parse_save_request("def doubled(n: int) -> int:\n    \"\"\"x\"\"\"\n    return n\n\n__save__ = False\n")
+        is None,
+        "parse_save_request: __save__ = False is not a save",
+    )
+    check(parse_save_request("def broken(:\n") is None, "parse_save_request: syntax error returns None, not an exception")
+
+
+def test_parse_save_request_rejects_bad_shapes() -> None:
+    from smile.server.parse_save_request import parse_save_request
+    from smile.server.saved_script_error import SavedScriptError
+
+    cases = {
+        "invalid value": "__save__ = 1\ndef f(n: int) -> int:\n    \"\"\"d\"\"\"\n    return n\n",
+        "no function": "__save__ = True\n__result__ = 1\n",
+        "two functions": (
+            "def a(n: int) -> int:\n    \"\"\"a\"\"\"\n    return n\n"
+            "def b(n: int) -> int:\n    \"\"\"b\"\"\"\n    return n\n"
+            "__save__ = True\n"
+        ),
+        "no hints": "__save__ = True\ndef f(n):\n    \"\"\"d\"\"\"\n    return n\n",
+        "no return hint": "__save__ = True\ndef f(n: int):\n    \"\"\"d\"\"\"\n    return n\n",
+        "no docstring": "__save__ = True\ndef f(n: int) -> int:\n    return n\n",
+        "async": "__save__ = True\nasync def f(n: int) -> int:\n    \"\"\"d\"\"\"\n    return n\n",
+        "private name": "__save__ = \"_hidden\"\ndef f(n: int) -> int:\n    \"\"\"d\"\"\"\n    return n\n",
+        "keyword name": "__save__ = \"class\"\ndef f(n: int) -> int:\n    \"\"\"d\"\"\"\n    return n\n",
+    }
+    for label, code in cases.items():
+        try:
+            parse_save_request(code)
+        except SavedScriptError:
+            check(True, f"parse_save_request: rejects {label}")
+        else:
+            check(False, f"parse_save_request: rejects {label}")
+
+
+def test_script_store_overwrite_and_capacity() -> None:
+    from smile.sandbox import SavedScriptRecord
+    from smile.server.constants import SCRIPT_MISSING
+    from smile.server.saved_script_error import SavedScriptError
+    from smile.server.script_store import ScriptStore
+
+    def _rec(name: str, source: str = "def f() -> int:\n    return 1\n") -> SavedScriptRecord:
+        return SavedScriptRecord(
+            name=name,
+            func_name="f",
+            source=source,
+            description="d",
+            signature=f"scripts.{name}() -> int",
+            example=f"scripts.{name}()",
+        )
+
+    store = ScriptStore(max_scripts=2)
+    store.put(_rec("a", "source-a"))
+    store.put(_rec("a", "source-a-v2"))
+    check(store.get("a").source == "source-a-v2", "store: put on an existing name overwrites")  # type: ignore[union-attr]
+    store.put(_rec("b"))
+    try:
+        store.put(_rec("c"))
+    except SavedScriptError:
+        check(True, "store: a new name at capacity is refused")
+    else:
+        check(False, "store: a new name at capacity is refused")
+    check(store.get("c") is SCRIPT_MISSING, "store: the refused name was not stored")
+    check(
+        store.names() == {"scripts.a", "scripts.b"},
+        f"store: names() uses the scripts. prefix (got {store.names()})",
+    )
+
+
+def test_run_script_hydrates_saved_scripts() -> None:
+    from smile.sandbox import SavedScriptRecord, run_script
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    record = SavedScriptRecord(
+        name="doubled",
+        func_name="doubled",
+        source='def doubled(n: int) -> int:\n    """Double n."""\n    return echo(n) + echo(n)\n',
+        description="Double n.",
+        signature="scripts.doubled(n: int) -> int",
+        example="scripts.doubled(n=...)",
+    )
+    result = run_script(
+        "__result__ = scripts.doubled(4)",
+        registry.namespace(),
+        saved_scripts=(record,),
+    )
+    check(result.error is None, f"hydrate: saved script runs without error (got {result.error})")
+    check(result.return_value == 8, f"hydrate: scripts.doubled(4) == 8 (got {result.return_value})")
+
+    empty = run_script("__result__ = hasattr(scripts, 'nope')", registry.namespace(), saved_scripts=())
+    check(
+        empty.error is None and empty.return_value is False,
+        f"hydrate: an empty saved_scripts tuple still binds scripts (error={empty.error}, value={empty.return_value})",
+    )
+
+    # NameError is not a sandbox builtin, so catch Exception.
+    absent = run_script(
+        "try:\n    scripts\n    __result__ = 'bound'\nexcept Exception:\n    __result__ = 'unbound'",
+        registry.namespace(),
+    )
+    check(
+        absent.return_value == "unbound",
+        f"hydrate: saved_scripts=None does not bind scripts (got {absent.return_value!r}, error={absent.error})",
+    )
+
+
+def test_saved_scripts_compose_and_depth_limit() -> None:
+    from smile.sandbox import SavedScriptRecord, run_script
+    from smile.sandbox.constants import MAX_SAVED_SCRIPT_DEPTH
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    add = SavedScriptRecord(
+        name="add",
+        func_name="add",
+        source='def add(n: int) -> int:\n    """Add one via echo."""\n    return echo(n) + 1\n',
+        description="Add one via echo.",
+        signature="scripts.add(n: int) -> int",
+        example="scripts.add(n=...)",
+    )
+    twice = SavedScriptRecord(
+        name="twice",
+        func_name="twice",
+        source='def twice(n: int) -> int:\n    """Call add twice."""\n    return scripts.add(scripts.add(n))\n',
+        description="Call add twice.",
+        signature="scripts.twice(n: int) -> int",
+        example="scripts.twice(n=...)",
+    )
+    composed = run_script(
+        "__result__ = scripts.twice(3)",
+        registry.namespace(),
+        saved_scripts=(add, twice),
+    )
+    check(composed.error is None, f"compose: scripts.twice calls scripts.add (error={composed.error})")
+    check(composed.return_value == 5, f"compose: twice(3) == 5 (got {composed.return_value})")
+
+    loop = SavedScriptRecord(
+        name="loop",
+        func_name="loop",
+        source='def loop(n: int) -> int:\n    """Recurse via the namespace."""\n    return scripts.loop(n)\n',
+        description="Recurse via the namespace.",
+        signature="scripts.loop(n: int) -> int",
+        example="scripts.loop(n=...)",
+    )
+    cycled = run_script(
+        "__result__ = scripts.loop(1)",
+        registry.namespace(),
+        saved_scripts=(loop,),
+        timeout_s=5.0,
+    )
+    check(cycled.error is not None, "compose: unbounded scripts.* recursion is an error, not a hang")
+    check(
+        cycled.error is not None and "depth exceeded" in cycled.error,
+        "compose: the error names the depth limit",
+    )
+    check(
+        cycled.error is not None and str(MAX_SAVED_SCRIPT_DEPTH) in cycled.error,
+        "compose: the error includes the numeric depth cap",
+    )
+
+
+def test_extract_called_capabilities_expands_saved_scripts() -> None:
+    from smile.server.extract_called_capabilities import extract_called_capabilities
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    registry.register(_crm_method, name="crm.get_customer")
+
+    sources = {
+        "scripts.doubled": 'def doubled(n: int) -> int:\n    return echo(n) + echo(n)\n',
+        "scripts.twice": 'def twice(n: int) -> int:\n    return scripts.doubled(scripts.doubled(n))\n',
+        "scripts.loop_a": 'def loop_a(n: int) -> int:\n    return scripts.loop_b(n)\n',
+        "scripts.loop_b": 'def loop_b(n: int) -> int:\n    return scripts.loop_a(n)\n',
+    }
+    called = extract_called_capabilities("__result__ = scripts.twice(1)", registry, sources)
+    check(
+        called == ["echo", "scripts.doubled", "scripts.twice"],
+        f"extract: expands scripts.twice -> scripts.doubled -> echo (got {called})",
+    )
+    cyclic = extract_called_capabilities("__result__ = scripts.loop_a(1)", registry, sources)
+    check(
+        cyclic == ["scripts.loop_a", "scripts.loop_b"],
+        f"extract: mutual recursion terminates (got {cyclic})",
+    )
+    mixed = extract_called_capabilities(
+        "x = crm.get_customer(1)\ny = scripts.doubled(2)", registry, sources
+    )
+    check(
+        mixed == ["crm.get_customer", "echo", "scripts.doubled"],
+        f"extract: mixes operator capabilities with expanded saved scripts (got {mixed})",
+    )
+
+
+def test_perform_execute_script_save_then_reuse() -> None:
+    import json
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.server.catalog_with_saved_scripts import catalog_with_saved_scripts
+    from smile.server.constants import SOURCE_SAVED_SCRIPT
+    from smile.server.perform_execute_script import perform_execute_script
+    from smile.server.script_store import ScriptStore
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    store = ScriptStore()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        log_path = str(_Path(tmp) / "intent.log")
+        settings = _script_settings(log_path)
+
+        first = perform_execute_script(
+            _SAVE_DOUBLE, "publish a doubler", registry=registry, script_store=store, settings=settings
+        )
+        check(first["error"] is None, f"save: first run succeeds (error={first['error']})")
+        check(first["return_value"] == 6, f"save: verify call doubled(3) == 6 (got {first['return_value']})")
+        check(
+            first.get("saved_script", {}).get("name") == "scripts.doubled",
+            f"save: response names the published function (got {first.get('saved_script')})",
+        )
+
+        catalog = catalog_with_saved_scripts(registry, store)
+        saved = [e for e in catalog if e["source"] == SOURCE_SAVED_SCRIPT]
+        check(len(saved) == 1 and saved[0]["name"] == "scripts.doubled", "save: catalog lists scripts.doubled")
+        check("echo" in [e["name"] for e in catalog], "save: operator capabilities remain in the catalog")
+
+        second = perform_execute_script(
+            "__result__ = scripts.doubled(4)",
+            "reuse the doubler",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(second["error"] is None, f"reuse: scripts.doubled(4) runs (error={second['error']})")
+        check(second["return_value"] == 8, f"reuse: scripts.doubled(4) == 8 (got {second['return_value']})")
+        check("saved_script" not in second, "reuse: a call that does not save omits saved_script")
+
+        records = [json.loads(line) for line in _Path(log_path).read_text().splitlines()]
+        check(len(records) == 2, f"reuse: two execute_script calls write two intent lines (got {len(records)})")
+        check(
+            records[1]["called_capabilities"] == ["echo", "scripts.doubled"],
+            f"reuse: intent log expands the saved body (got {records[1]['called_capabilities']})",
+        )
+
+
+def test_perform_execute_script_overwrite_and_save_errors() -> None:
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.server.perform_execute_script import perform_execute_script
+    from smile.server.script_store import ScriptStore
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    store = ScriptStore(max_scripts=1)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _script_settings(str(_Path(tmp) / "intent.log"))
+
+        perform_execute_script(
+            _SAVE_DOUBLE, "publish a doubler", registry=registry, script_store=store, settings=settings
+        )
+        overwritten = perform_execute_script(
+            """
+def doubled(n: int) -> int:
+    \"\"\"Triple n.\"\"\"
+    return echo(n) + echo(n) + echo(n)
+
+__save__ = True
+__result__ = doubled(2)
+""",
+            "replace the doubler with a tripler",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(overwritten["return_value"] == 6, "overwrite: the new body runs in the same call")
+        reused = perform_execute_script(
+            "__result__ = scripts.doubled(2)",
+            "call the replacement",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(reused["return_value"] == 6, f"overwrite: later calls see the new body (got {reused['return_value']})")
+
+        full = perform_execute_script(
+            """
+def other(n: int) -> int:
+    \"\"\"A second function, but the store is full.\"\"\"
+    return n
+
+__save__ = True
+""",
+            "try to save a second name",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(full["error"] is not None and "already holds" in full["error"], "overwrite: a new name at capacity fails")
+        check(full["return_value"] is None, "overwrite: a failed save does not run the script")
+
+        taken = CapabilityRegistry()
+        taken.register(_echo, name="scripts.echo")
+        blocked = perform_execute_script(
+            _SAVE_DOUBLE,
+            "save into a taken namespace",
+            registry=taken,
+            script_store=ScriptStore(),
+            settings=settings,
+        )
+        check(
+            blocked["error"] is not None and "already uses" in blocked["error"],
+            "overwrite: operator scripts.* namespace blocks saving",
+        )
+
+
+def test_parse_unpublish_request() -> None:
+    from smile.server.parse_unpublish_request import parse_unpublish_request
+    from smile.server.saved_script_error import SavedScriptError
+
+    check(
+        parse_unpublish_request('__unpublish__ = "doubled"') == "doubled",
+        "unpublish: a name string is accepted",
+    )
+    check(parse_unpublish_request("__result__ = 1") is None, "unpublish: absent is not an unpublish")
+    try:
+        parse_unpublish_request("__unpublish__ = True")
+    except SavedScriptError:
+        check(True, "unpublish: True is rejected (no name to infer)")
+    else:
+        check(False, "unpublish: True is rejected (no name to infer)")
+
+
+def test_perform_execute_script_unpublish() -> None:
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.server.catalog_with_saved_scripts import catalog_with_saved_scripts
+    from smile.server.constants import SOURCE_SAVED_SCRIPT
+    from smile.server.perform_execute_script import perform_execute_script
+    from smile.server.script_store import ScriptStore
+
+    registry = CapabilityRegistry()
+    registry.register(_echo, name="echo")
+    store = ScriptStore()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        settings = _script_settings(str(_Path(tmp) / "intent.log"))
+        perform_execute_script(
+            _SAVE_DOUBLE, "publish a doubler", registry=registry, script_store=store, settings=settings
+        )
+        both = perform_execute_script(
+            '__save__ = True\n__unpublish__ = "doubled"\ndef f(n: int) -> int:\n    """x"""\n    return n\n',
+            "refuse save and unpublish together",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(
+            both["error"] is not None and "both" in both["error"],
+            "unpublish: __save__ and __unpublish__ together fail",
+        )
+        missing = perform_execute_script(
+            '__unpublish__ = "nope"',
+            "unpublish a name that does not exist",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(
+            missing["error"] is not None and "no saved script" in missing["error"],
+            "unpublish: unknown name fails",
+        )
+        removed = perform_execute_script(
+            '__unpublish__ = "doubled"\n__result__ = 1',
+            "remove the doubler",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(removed["error"] is None, f"unpublish: succeeds (error={removed['error']})")
+        check(
+            removed.get("unpublished_script", {}).get("name") == "scripts.doubled",
+            f"unpublish: response names the removed function (got {removed.get('unpublished_script')})",
+        )
+        catalog = catalog_with_saved_scripts(registry, store)
+        check(
+            not any(e["source"] == SOURCE_SAVED_SCRIPT for e in catalog),
+            "unpublish: catalog no longer lists the function",
+        )
+        gone = perform_execute_script(
+            "__result__ = scripts.doubled(1)",
+            "call the removed function",
+            registry=registry,
+            script_store=store,
+            settings=settings,
+        )
+        check(gone["error"] is not None, "unpublish: later scripts cannot call the removed function")
+
+
+def test_script_store_persists_across_reload() -> None:
+    import tempfile
+    from pathlib import Path as _Path
+
+    from smile.sandbox import SavedScriptRecord
+    from smile.server.constants import SCRIPT_MISSING
+    from smile.server.load_script_store import load_script_store
+    from smile.server.script_store import ScriptStore
+    from smile.server.server_settings import ServerSettings
+
+    record = SavedScriptRecord(
+        name="doubled",
+        func_name="doubled",
+        source='def doubled(n: int) -> int:\n    """d"""\n    return n * 2\n',
+        description="d",
+        signature="scripts.doubled(n: int) -> int",
+        example="scripts.doubled(n=...)",
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        persist = str(_Path(tmp) / "scripts")
+        _Path(persist).mkdir()
+        live = ScriptStore(max_scripts=8, persist_dir=persist)
+        live.put(record)
+        check(
+            (_Path(persist) / "doubled.json").is_file(),
+            "persist: put writes {name}.json",
+        )
+        settings = ServerSettings(
+            result_budget=12_000,
+            stream_budget=4_000,
+            timeout_s=10.0,
+            max_stored_results=8,
+            intent_log_path=str(_Path(tmp) / "intent.log"),
+            max_saved_scripts=8,
+            scripts_dir=persist,
+        )
+        reloaded = load_script_store(settings)
+        loaded = reloaded.get("doubled")
+        check(loaded is not SCRIPT_MISSING, "persist: a new store reloads the file")
+        check(
+            getattr(loaded, "source", None) == record.source,
+            "persist: reloaded source matches what was saved",
+        )
+        reloaded.delete("doubled")
+        check(
+            not (_Path(persist) / "doubled.json").exists(),
+            "persist: delete removes the file",
+        )
+        empty = load_script_store(settings)
+        check(empty.get("doubled") is SCRIPT_MISSING, "persist: a third store no longer sees it")
 
 
 # --------------------------------------------------------------------------

@@ -13,7 +13,8 @@
         "$comment_capabilities": [
           "Which capabilities to serve. Pick ONE of the two settings below;",
           "setting both is an error the server reports at startup. As written,",
-          "neither is set, so this config runs against the bundled demo CRM and",
+          "neither is set, so this config runs against the bundled repo_tools",
+          "capability set (introspection/git/GitHub/tests for this repo) and",
           "works as-is -- uncomment one and point it at your own code.",
           "",
           "SMILE_CAPABILITIES takes a 'module.path:attribute' reference to your",
@@ -39,8 +40,24 @@
           "Seconds a sandboxed script may run before it is terminated, and how",
           "many full results are retained for smile://results/{id} fetches."
         ],
-        "SMILE_TIMEOUT_S": "10",
-        "SMILE_MAX_STORED_RESULTS": "32"
+        "SMILE_TIMEOUT_S": "30",
+        "SMILE_MAX_STORED_RESULTS": "32",
+        "SMILE_MAX_SAVED_SCRIPTS": "32",
+
+        "$comment_saved_scripts": [
+          "Optional directory of {name}.json files so __save__'d functions",
+          "survive a server restart. Unset (the default) keeps them in",
+          "memory only. Uncomment to persist:",
+          "",
+          "  \"SMILE_SCRIPTS_DIR\": \".smile/scripts\","
+        ],
+
+        "$comment_intent_log": [
+          "File each execute_script call's stated intent and the capabilities",
+          "its code actually called are appended to, one JSON line per call.",
+          "Defaults to smile_intent.log in the working directory."
+        ],
+        "SMILE_INTENT_LOG": "smile_intent.log"
       }
     }
   }

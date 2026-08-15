@@ -17,12 +17,15 @@ from typing import Any, Callable
 
 from smile.sandbox.build_payload import build_payload
 from smile.sandbox.build_restricted_globals import build_restricted_globals
+from smile.sandbox.hydrate_saved_scripts import hydrate_saved_scripts
+from smile.sandbox.saved_script_record import SavedScriptRecord
 
 
 def worker(
     code: str,
     capability_namespace: dict[str, Callable[..., Any]],
     extra_names: dict[str, Any],
+    saved_scripts: tuple[SavedScriptRecord, ...] | None,
     result_queue: "multiprocessing.Queue",
 ) -> None:
     """Runs inside the child process. Executes `code`, captures everything."""
@@ -36,6 +39,8 @@ def worker(
     g["__result__"] = None
 
     try:
+        if saved_scripts is not None:
+            hydrate_saved_scripts(g, saved_scripts)
         with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
             exec(compile(code, "<agent_script>", "exec"), g)
         return_value = g.get("__result__")

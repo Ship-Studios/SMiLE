@@ -28,12 +28,10 @@ from mcp.client.stdio import stdio_client
 MODEL = "gemini-2.5-flash-lite"
 
 TASK = (
-    "Using the available tools, find all 'enterprise' tier customers, "
-    "and for each one, compute the total amount they've paid (status='paid' orders only). "
-    "Then send each of them an email with the subject 'Your account summary' "
-    "and a body mentioning their total. "
+    "Using the available tools, list the 5 most recent commits in this repository, "
+    "then count how many Python files under smile/repo_tools/ exist. "
     "Do this with a single script rather than many small tool calls. "
-    "Finally, tell me in plain English how many customers you emailed and their totals."
+    "Finally, tell me in plain English the commit count and the file count."
 )
 
 

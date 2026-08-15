@@ -4,6 +4,7 @@ Python against a capability namespace in an isolated subprocess."""
 from __future__ import annotations
 
 import multiprocessing
+from collections.abc import Sequence
 from typing import Any, Callable
 
 from smile.sandbox.await_payload import await_payload
@@ -16,6 +17,7 @@ from smile.sandbox.constants import (
     REAP_TIMEOUT_S as _REAP_TIMEOUT_S,
     TIMED_OUT as _TIMED_OUT,
 )
+from smile.sandbox.saved_script_record import SavedScriptRecord
 from smile.sandbox.script_result import ScriptResult
 from smile.sandbox.terminate_process import terminate_process
 from smile.sandbox.worker import worker
@@ -26,6 +28,7 @@ def run_script(
     capability_namespace: dict[str, Callable[..., Any]],
     *,
     extra_names: dict[str, Any] | None = None,
+    saved_scripts: Sequence[SavedScriptRecord] | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     result_budget: int = DEFAULT_RESULT_BUDGET,
     stream_budget: int = DEFAULT_STREAM_BUDGET,
@@ -44,12 +47,24 @@ def run_script(
     Streams over `stream_budget` are excerpted head+tail. Pass a budget of
     0 to disable the corresponding cap (useful for library callers that
     aren't feeding an LLM).
+
+    `saved_scripts` is a sequence of picklable SavedScriptRecords. `None`
+    (the default) does not bind a `scripts` global, so existing library
+    callers are unchanged. An empty sequence binds an empty `scripts`
+    namespace -- that is what execute_script passes so `scripts.foo`
+    is an AttributeError rather than a NameError.
     """
     ctx = multiprocessing.get_context("spawn")
     result_queue: multiprocessing.Queue = ctx.Queue()
     proc = ctx.Process(
         target=worker,
-        args=(code, capability_namespace, extra_names or {}, result_queue),
+        args=(
+            code,
+            capability_namespace,
+            extra_names or {},
+            None if saved_scripts is None else tuple(saved_scripts),
+            result_queue,
+        ),
     )
     proc.start()
 

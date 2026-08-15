@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 
 from smile.capabilities.capability import Capability
 from smile.capabilities.registry_add import registry_add
+from smile.capabilities.registry_capability_names import registry_capability_names
 from smile.capabilities.registry_collect import registry_collect
 from smile.capabilities.registry_list_capabilities import registry_list_capabilities
 from smile.capabilities.registry_load_specs import registry_load_specs
@@ -41,4 +42,5 @@ CapabilityRegistry.collect = registry_collect
 CapabilityRegistry._add = registry_add
 CapabilityRegistry.namespace = registry_namespace
 CapabilityRegistry.list_capabilities = registry_list_capabilities
+CapabilityRegistry.capability_names = registry_capability_names
 CapabilityRegistry.stub_file = registry_stub_file

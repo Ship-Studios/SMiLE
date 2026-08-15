@@ -8,3 +8,6 @@ dist/
 .ruff_cache/
 .claude/worktrees/
 site/
+smile_intent.log
+.smile/
+.smile_test_escape_link

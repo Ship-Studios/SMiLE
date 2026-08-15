@@ -37,9 +37,11 @@ MCP involvement at all.
 
 ## Where to start
 
-- **[Defining capabilities](capabilities.md)** — the four ways to register
+- **[Defining capabilities](capabilities.md)** — the five ways to register
   a capability, with the picklability, async, and per-parameter-description
-  details that matter once you go past the basic case.
+  details that matter once you go past the basic case. Agent-saved
+  functions (`__save__` / `scripts.*`) are documented at the end of that
+  page.
 - **API Reference** (sidebar) — generated from docstrings, one page per
   public class/function.
 

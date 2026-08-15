@@ -16,7 +16,15 @@ Allowed builtins: `abs`, `all`, `any`, `ascii`, `bin`, `bool`, `bytearray`,
 `map`, `max`, `min`, `next`, `oct`, `ord`, `pow`, `print`, `property`,
 `range`, `repr`, `reversed`, `round`, `set`, `setattr`, `slice`, `sorted`,
 `str`, `sum`, `tuple`, `type`, `zip`, plus `None`/`True`/`False`/
-`NotImplemented` and the common built-in exception types.
+`NotImplemented` and the common built-in exception types (`Exception`,
+`ValueError`, `TypeError`, `KeyError`, `IndexError`, `NameError`, and the
+other names listed in `SAFE_BUILTIN_NAMES`).
+
+Pass `saved_scripts=` (a sequence of `SavedScriptRecord` values) to bind
+those functions as `scripts.<name>(...)` inside the child. `None` (the
+default) does not bind `scripts` at all; an empty sequence binds an empty
+`scripts` namespace. The MCP server hydrates this from the session
+`ScriptStore` on every `execute_script` call.
 
 The script hands back its result by assigning to a special `__result__`
 variable — this mirrors how a real MCP tool result is a single structured

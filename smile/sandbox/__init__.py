@@ -28,6 +28,7 @@ single sandbox.py file).
 from __future__ import annotations
 
 from smile.sandbox.run_script import run_script
+from smile.sandbox.saved_script_record import SavedScriptRecord
 from smile.sandbox.script_result import ScriptResult
 
-__all__ = ["run_script", "ScriptResult"]
+__all__ = ["run_script", "SavedScriptRecord", "ScriptResult"]

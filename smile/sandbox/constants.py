@@ -2,7 +2,8 @@
 this file exists so the constants aren't declared inside a function/method
 file (which would violate one-def-per-file for that file's own function)."""
 
-DEFAULT_TIMEOUT_S = 10.0
+# Sized to fit the default-served run_tests() capability with slack.
+DEFAULT_TIMEOUT_S = 30.0
 
 # Grace period for reaping a child process that has already delivered its
 # result (or is being terminated). Not a script budget -- purely the time
@@ -66,6 +67,18 @@ SHAPE_KEY_SAMPLE = 8
 # log usually carries the failure or the summary, so keep a slice of it.
 STREAM_TAIL_FRACTION = 0.3
 
+# How deep one execute_script call may nest saved-script invocations
+# (scripts.a calling scripts.b calling ...). Bounds runaway recursion /
+# mutual cycles with a clearer error than a raw RecursionError. Ordinary
+# composition is one or two deep; 32 is generous for that and still
+# fails fast on an unbounded loop.
+MAX_SAVED_SCRIPT_DEPTH = 32
+
+# Reserved sandbox global under which saved scripts are exposed, e.g.
+# scripts.paid_total(...). Must stay a single identifier --
+# registry_namespace only supports one dot of attribute access.
+SAVED_SCRIPTS_NAMESPACE = "scripts"
+
 # Builtins considered safe enough for a trusted-ish scripting sandbox.
 # Deliberately excludes: __import__, open, exec, eval, compile, input,
 # breakpoint, exit, quit, and anything that touches the filesystem or
@@ -81,6 +94,7 @@ SAFE_BUILTIN_NAMES = frozenset(
         "setattr", "slice", "sorted", "str", "sum", "tuple", "type", "zip",
         "None", "True", "False", "NotImplemented",
         "Exception", "ValueError", "TypeError", "KeyError", "IndexError",
+        "NameError",
         "StopIteration", "RuntimeError", "AttributeError", "ArithmeticError",
         "ZeroDivisionError", "OverflowError", "AssertionError",
     }
