@@ -28,12 +28,13 @@ def saved_script_call(self: "SavedScript", *args: Any, **kwargs: Any) -> Any:
         )
     token = _call_stack.set((*stack, self.record.name))
     try:
+        if self.code is None:
+            self.code = compile(
+                self.record.source, f"<saved:{self.record.name}>", "exec"
+            )
         g: dict[str, Any] = {"__builtins__": self.builtins}
         g.update(self.inject)
-        exec(
-            compile(self.record.source, f"<saved:{self.record.name}>", "exec"),
-            g,
-        )
+        exec(self.code, g)
         fn = g.get(self.record.func_name)
         if not callable(fn):
             raise RuntimeError(

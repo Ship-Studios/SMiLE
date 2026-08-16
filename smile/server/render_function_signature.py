@@ -14,7 +14,15 @@ def render_function_signature(
 
     Namespaced, so this is call-style rather than a `def` statement --
     the same reason capability_stub_signature uses call-style for
-    prefixed capabilities.
+    prefixed capabilities. Deliberately not sharing that function's
+    assembly loop: this runs on an `ast.FunctionDef` before the script
+    body has been compiled or executed (parse_save_request validates a
+    save request before any capability namespace exists to run it
+    against), where capability_stub_signature.py needs a live callable
+    for `inspect.signature`. format_function_arg.py already factors out
+    the one piece that is genuinely shared (rendering a single `name: T
+    = default`); the walk over `ast.arguments` vs. `inspect.Signature`
+    remains separate because those are two different stdlib shapes.
     """
     args = node.args
     parts: list[str] = []

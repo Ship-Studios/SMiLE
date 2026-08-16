@@ -26,3 +26,9 @@ def saved_script_init(
     self.builtins = builtins
     self.__name__ = record.name
     self.__doc__ = record.description
+    # Compiled lazily on first __call__, not here -- hydrate_saved_scripts
+    # constructs a SavedScript for every record in the store on every
+    # sandbox spawn, so compiling eagerly would pay parse+compile cost for
+    # scripts a given script never calls. Cached on self after that first
+    # call so a script invoked repeatedly inside a loop only pays it once.
+    self.code = None

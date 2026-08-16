@@ -1,12 +1,8 @@
 """enforce_run_tests_interval: file-backed floor between run_tests calls.
 
-Uses flock (POSIX only) so concurrent execute_script children cannot
-each pass the check against a stale stamp. `fcntl` doesn't exist on
-Windows; importing it at module level would break every capability in
-the default registry (repo_tools/__init__.py imports this module
-unconditionally), not just run_tests(), so the import is optional and
-the interval check degrades to unlocked (best-effort, racy under
-concurrent callers) rather than taking the whole server down.
+Uses flock (POSIX only, see smile/file_lock.py) so concurrent
+execute_script children cannot each pass the check against a stale
+stamp.
 """
 
 from __future__ import annotations
@@ -15,10 +11,7 @@ import os
 import time
 from pathlib import Path
 
-try:
-    import fcntl
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
+from smile.file_lock import file_lock
 
 
 def enforce_run_tests_interval(min_interval_s: float, stamp_path: Path) -> None:
@@ -27,9 +20,7 @@ def enforce_run_tests_interval(min_interval_s: float, stamp_path: Path) -> None:
     later processes can see it.
     """
     stamp_path.touch(exist_ok=True)
-    with stamp_path.open("r+") as handle:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    with stamp_path.open("r+") as handle, file_lock(handle):
         raw = handle.read().strip()
         now = time.time()
         if raw:

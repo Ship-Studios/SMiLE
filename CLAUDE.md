@@ -243,9 +243,10 @@ has none.
 Every git/gh/test capability shells out through the shared `run_subprocess.py`
 helper with a fixed argv list (never `shell=True`, never a caller-built command
 string). User-supplied tokens that could be parsed as options (e.g. `git show`
-refs) are rejected if they start with `-` and passed after
-`--end-of-options` so they cannot become git switches. `--` is the
-path-separator, not an option terminator, for `git show`. Subprocesses start in their own
+refs) are rejected outright if they start with `-`, since `git show` has no
+real options-terminator for a revision argument — `--` there separates
+pathspecs, not options — so the `startswith("-")` check is the only defense,
+not a belt-and-suspenders pair with a terminator. Subprocesses start in their own
 process group and are killed as a group on timeout or when the sandbox worker
 is terminated; their timeout is capped at `SMILE_TIMEOUT_S` so they cannot
 outlive the script budget.

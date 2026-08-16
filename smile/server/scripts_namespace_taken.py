@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import typing
 
+from smile.capabilities.namespace_head_collides import namespace_head_collides
 from smile.sandbox.constants import SAVED_SCRIPTS_NAMESPACE
 
 if typing.TYPE_CHECKING:
@@ -14,8 +15,4 @@ if typing.TYPE_CHECKING:
 def scripts_namespace_taken(registry: "CapabilityRegistry") -> bool:
     """True if binding a `scripts` namespace object would shadow, or be
     shadowed by, an operator-registered capability."""
-    head = SAVED_SCRIPTS_NAMESPACE
-    return any(
-        name == head or name.startswith(head + ".")
-        for name in registry.capability_names()
-    )
+    return namespace_head_collides(SAVED_SCRIPTS_NAMESPACE, registry.capability_names())
