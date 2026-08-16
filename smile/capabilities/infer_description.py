@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable
 
+from smile.capabilities.first_paragraph import first_paragraph
+
 
 def infer_description(func: Callable[..., Any]) -> str | None:
     """Pull a one-line description from the function's docstring summary
@@ -12,7 +14,4 @@ def infer_description(func: Callable[..., Any]) -> str | None:
     doc = inspect.getdoc(func)
     if not doc:
         return None
-    # First paragraph = everything up to the first blank line.
-    first_para = doc.split("\n\n", 1)[0].strip()
-    # Collapse internal newlines/indentation into a single line.
-    return " ".join(line.strip() for line in first_para.splitlines() if line.strip())
+    return first_paragraph(doc)

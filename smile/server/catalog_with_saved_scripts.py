@@ -6,6 +6,7 @@ from __future__ import annotations
 import typing
 from typing import Any
 
+from smile.capabilities.catalog_entry import catalog_entry
 from smile.sandbox.constants import SAVED_SCRIPTS_NAMESPACE
 from smile.server.constants import SOURCE_SAVED_SCRIPT
 
@@ -23,13 +24,13 @@ def catalog_with_saved_scripts(
     entries = list(registry.list_capabilities())
     for record in store.list():
         entries.append(
-            {
-                "name": f"{SAVED_SCRIPTS_NAMESPACE}.{record.name}",
-                "signature": record.signature,
-                "description": record.description,
-                "example": record.example,
-                "source": SOURCE_SAVED_SCRIPT,
-            }
+            catalog_entry(
+                name=f"{SAVED_SCRIPTS_NAMESPACE}.{record.name}",
+                signature=record.signature,
+                description=record.description,
+                example=record.example,
+                source=SOURCE_SAVED_SCRIPT,
+            )
         )
     entries.sort(key=lambda entry: entry["name"])
     return entries

@@ -7,6 +7,7 @@ from __future__ import annotations
 import typing
 
 from smile.capabilities.errors import CapabilityDefinitionError
+from smile.capabilities.namespace_head_collides import namespace_head_collides
 
 if typing.TYPE_CHECKING:
     from smile.capabilities.capability_registry import CapabilityRegistry
@@ -31,25 +32,26 @@ def validate_no_namespace_shadowing(
     capability the catalog advertises but the sandbox can't call.
     """
     head = exposed_name.split(".", 1)[0]
+    # registry_add already rejects an exact-key duplicate of exposed_name
+    # before this runs, so self._capabilities cannot contain it here.
+    existing_names = list(self._capabilities)
 
-    # Case 1: registering "crm" (or "crm.x") when a namespace "crm.*"
-    # already exists.
-    shadowed = [
-        existing
-        for existing in self._capabilities
-        if existing.split(".", 1)[0] == head and existing != exposed_name
-    ]
-    conflicting = [
-        existing
-        for existing in shadowed
-        # A collision only occurs when one of the two names is the bare
-        # namespace head; two capabilities sharing a prefix (the normal
-        # "crm.a" + "crm.b" case) coexist fine as attributes of one object.
-        if existing == head or exposed_name == head
-    ]
+    # Only the bare namespace head participates in a collision (two
+    # capabilities sharing a prefix, e.g. "crm.a" + "crm.b", coexist fine
+    # as attributes of one object), so this only needs to check in the
+    # direction that's actually being registered: either exposed_name
+    # itself is the bare head and some "head.*" already exists, or
+    # exposed_name is "head.*" and the bare "head" already exists.
+    if exposed_name == head:
+        collides = namespace_head_collides(head, existing_names)
+    else:
+        collides = head in existing_names
 
-    if conflicting:
-        other = conflicting[0]
+    if collides:
+        if exposed_name == head:
+            other = next(existing for existing in existing_names if existing.startswith(head + "."))
+        else:
+            other = head
         flat, namespaced = (exposed_name, other) if exposed_name == head else (other, exposed_name)
         raise CapabilityDefinitionError(
             f"Capability '{exposed_name}' ({source}) collides with "

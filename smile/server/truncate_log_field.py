@@ -11,7 +11,7 @@ correctly for an arbitrary named field in a log record.
 
 from __future__ import annotations
 
-from smile.sandbox.constants import STREAM_TAIL_FRACTION
+from smile.sandbox.head_tail_excerpt import head_tail_excerpt
 
 
 def truncate_log_field(text: str, budget: int, field_name: str) -> str:
@@ -22,15 +22,9 @@ def truncate_log_field(text: str, budget: int, field_name: str) -> str:
         return text
 
     omitted = len(text) - budget
-    tail_chars = int(budget * STREAM_TAIL_FRACTION)
-    head_chars = budget - tail_chars
-
-    head = text[:head_chars]
-    tail = text[-tail_chars:] if tail_chars else ""
-
     marker = (
         f"\n\n... [SMiLE truncated {omitted:,} characters of {field_name} "
         f"({len(text):,} total) for the intent log. This is an excerpt, "
         f"not the complete {field_name}.] ...\n\n"
     )
-    return f"{head}{marker}{tail}"
+    return head_tail_excerpt(text, budget, marker)
