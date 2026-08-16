@@ -1,6 +1,6 @@
 [project]
 name = "smile-mcp"
-version = "0.3.0"
+version = "0.4.0"
 description = "SMiLE (Secure Message in Lambda Expressions) -- prototype MCP server for agent-authored Python against a sandboxed capability namespace"
 readme = "README.md"
 requires-python = ">=3.12"
