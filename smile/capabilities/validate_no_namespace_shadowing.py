@@ -35,6 +35,7 @@ def validate_no_namespace_shadowing(
     # registry_add already rejects an exact-key duplicate of exposed_name
     # before this runs, so self._capabilities cannot contain it here.
     existing_names = list(self._capabilities)
+    is_bare_head = exposed_name == head
 
     # Only the bare namespace head participates in a collision (two
     # capabilities sharing a prefix, e.g. "crm.a" + "crm.b", coexist fine
@@ -42,17 +43,17 @@ def validate_no_namespace_shadowing(
     # direction that's actually being registered: either exposed_name
     # itself is the bare head and some "head.*" already exists, or
     # exposed_name is "head.*" and the bare "head" already exists.
-    if exposed_name == head:
+    if is_bare_head:
         collides = namespace_head_collides(head, existing_names)
     else:
         collides = head in existing_names
 
     if collides:
-        if exposed_name == head:
+        if is_bare_head:
             other = next(existing for existing in existing_names if existing.startswith(head + "."))
         else:
             other = head
-        flat, namespaced = (exposed_name, other) if exposed_name == head else (other, exposed_name)
+        flat, namespaced = (exposed_name, other) if is_bare_head else (other, exposed_name)
         raise CapabilityDefinitionError(
             f"Capability '{exposed_name}' ({source}) collides with "
             f"'{other}': '{flat}' is a plain capability while '{namespaced}' "
