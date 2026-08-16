@@ -49,6 +49,14 @@ class ScriptStore:
     distinct names could otherwise both pass the capacity check before
     either writes, exceeding max_scripts."""
 
+    _reserved: "set[str]" = field(default_factory=set)
+    """New names claimed by an in-flight put() that hasn't finished its
+    (possibly slow, cross-process-locked) disk write yet. Counted
+    against max_scripts in the capacity check so put() doesn't have to
+    hold `_lock` across that write, but kept separate from `_scripts`
+    so a half-written record is never visible through get()/list()/
+    names()/sources()."""
+
 
 ScriptStore.put = script_store_put
 ScriptStore.get = script_store_get

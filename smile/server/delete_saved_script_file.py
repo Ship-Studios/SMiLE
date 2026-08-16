@@ -17,6 +17,16 @@ def delete_saved_script_file(persist_dir: str, name: str) -> None:
     concurrent save and unpublish of one script across two processes
     sharing SMILE_SCRIPTS_DIR are mutually exclusive rather than racing
     unlink() against replace().
+
+    Also best-effort unlinks the `.json.lock` sidecar itself once the
+    data file is gone, so republishing under a stream of different
+    names doesn't accumulate lock files forever. This happens *after*
+    releasing the flock, not inside the locked block: unlinking a file
+    out from under a concurrent holder/waiter of its flock is a classic
+    race (a racing opener can lock a since-replaced inode at the same
+    path), so the removal here is deliberately best-effort -- if it
+    fails (including because another process is using it right now)
+    the sidecar is simply left for a future call to try again.
     """
     directory = Path(persist_dir)
     path = directory / f"{name}.json"
@@ -28,3 +38,7 @@ def delete_saved_script_file(persist_dir: str, name: str) -> None:
         raise SavedScriptError(
             f"Cannot unpublish '{name}': failed to remove {str(path)!r}: {exc}"
         ) from exc
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
